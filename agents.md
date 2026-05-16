@@ -1,13 +1,12 @@
-# Guide for this project
-This project is a Raspberry Pi based controller for a game fridge.
+# Agent for this project
+The project's long-term goal is described in the README.md file.
+This project is a Raspberry Pi-based controller for a game fridge.
 The fridge has a cooler, a heater, and ventilation fan that are controlled via relays over a I2C bus.
 The fridge is controlled by a Raspberry Pi 4 with a custom interface board.
 The interface board has a SHT30 sensor and a MCP23017 GPIO.
-The SHT30 sensor is used to measure temperature and humidity.
-The MCP23017 GPIO is used to control the relays, read buttons, and drive indicator LEDs.
 
 The Raspberry Pi is accessed via SSH, this is configured in the Pycharm project.
-The remote project folder is at /home/ulrik/fridge
+The remote project folder is at /home/[user]/fridge
 
 The application must be able to run without interaction with the user or internet access.
 

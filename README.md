@@ -7,7 +7,7 @@ It can also be used to keep a massive amount of beer cold.
 The fridge is equipped with a temperature and humidity sensor, a heater and a cooler
 and a fan to ventilate.
 
-This is a work in progress.
+This is a work in progress and not all features are implemented yet.
 
 # Typical usage
 The system is Idle mode when the fridge is not in use.
@@ -81,7 +81,7 @@ The maximum switching frequency is one event per minute.
 
 # Software implementation
 The software is written in Python. It is a CLI application implemented using the Click library.
-It it normally run as a daemon, and the CLI is used to control the application.
+It is normally run as a daemon, and the CLI is used to control the application.
 
 The application has the following components:
 - Temperature regulation
@@ -117,8 +117,10 @@ The ModeState engine is used to switch between the three modes. The modes are de
 - **COOL**: The system is keep at a constant low temperature.
 
 ### ActionState
-This is ised for the actual temperature regulation.
+This is used for the actual temperature regulation.
 The ActionState engine is used to switch between the three actions based on target temperature and current temperature.
+The target temperature is defined in the configuration file but can be nudged by the EnergyState engine.
+The hysteresis is defined in the configuration file.
 - **COOLING**: The cooler is running.
 The state is switched to IDLE if the temperature is below the target temperature minus the hysteresis.
 - **IDLE**: Heater and cooler are turned off.
@@ -135,8 +137,6 @@ and raised by 1 degrees Celsius when heating is needed.
 - **NORMAL_PRICE**: The target temperature is kept at the same value.
 - **HIGH_PRICE**: The target temperature is raised by 2 degrees Celsius when cooling is needed,
 and lowered by 2 degrees Celsius when heating is needed.
-This application runs on a Raspberry Pi with I2C connected sensors and GPPIO.
-It has been developed on a Raspberry Pi 4B with 2GB RAM.
 
 ## Configuration
 The configuration is stored in an .ini file and read using the configparser library.
@@ -152,6 +152,14 @@ The application logs temperature, humidity and states to an SQLite database.
 The database can be exported to a CSV file using the --export cli option.
 
 ## MQTT
+To be implemented later
 The application can publish and subscribe to MQTT topics for logging and control.
 This is done using the paho-mqtt library.
+This is not used for temperature regulation.
+
+# Installation and usage
+This project uses `uv` for dependency management.
+```bash
+uv sync
+uv run fridge --help
 
