@@ -110,10 +110,11 @@ This makes it possible to update the application without losing the configuratio
 ## Temperature regulation
 The temperature is regulated using simple on / off logic.
 The regulator has three state engines; ModeState, ActionState and EnergyState.
-Temperature is measured every 30 seconds.
 
 The temperature regulation runs as a thread,
 and this thread is only started when the application is started as a daemon using the --daemon cli option.
+The regulation loop should run at a frequency of one turn per second, and temperature is measured at every turn.
+The loop checks the current state of the three state engines and updates the state accordingly.
 
 The last measured temperature and humidity is stored using diskcache.
 The last state of all three state engines is stored using diskcache,
@@ -147,6 +148,15 @@ and raised by 1 degrees Celsius when heating is needed.
 - **HIGH_PRICE**: The target temperature is raised by 2 degrees Celsius when cooling is needed,
 and lowered by 2 degrees Celsius when heating is needed.
 
+### Threshold generation helper
+The thermostat uses a helper function to generate mode-specific thresholds from configuration and `EnergyState`.
+- In **IDLE**, all thresholds are inactive (`None`) and should be handled as a special case in the regulation loop.
+- In **COOL_DOWN**, heater and cooler thresholds are derived generically from configured target temperature and hysteresis,
+  and fan thresholds are fixed to `1%` (on) / `0%` (off) to keep the fan running continuously.
+- In **COOL**, heater and cooler thresholds are also derived from target and hysteresis with energy adjustments,
+  while heater thresholds are clamped by `freeze_guard`.
+- For all values used by the helper, missing config entries fall back to the default values listed in this README.
+
 ## Configuration
 The configuration is stored in an .ini file and read using the configparser library.
 The configuration file is named fridge.ini in the users home directory.
@@ -157,7 +167,7 @@ The configuration file is read when the application starts.
 The application logs events (like state changes) to a file named fridge.log in the current working directory
 using the standard Python logging library.
 
-The application logs temperature, humidity and states to an SQLite database.
+The application logs temperature, humidity and states to an SQLite database once per minute.
 The database can be exported to a CSV file using the --export cli option.
 
 ## MQTT

@@ -17,3 +17,6 @@ from .signals import heater_started as heater_started
 from .signals import heater_stopped as heater_stopped
 from .signals import fan_started as fan_started
 from .signals import fan_stopped as fan_stopped
+from .signals import energy_state_changed as energy_state_changed
+
+cache_path = "/tmp/fridge"
