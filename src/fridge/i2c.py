@@ -5,7 +5,6 @@ from smbus2 import SMBus
 logger = logging.getLogger(__name__)
 
 _bus_lock = threading.Lock()
-_bus = SMBus(1)
 
 
 def i2c_scan() -> list[int]:
@@ -14,15 +13,16 @@ def i2c_scan() -> list[int]:
     :return: A list of I2C addresses
     """
     with _bus_lock:
-        addresses = []
-        for addr in range(256):
-            try:
-                _bus.read_byte(addr)
-                addresses.append(addr)
-                logger.info(f"Found I2C device at address: {addr:01x}")
-            except OSError:
-                continue
-        return addresses
+        with SMBus(1) as bus:
+            addresses = []
+            for addr in range(256):
+                try:
+                    bus.read_byte(addr)
+                    addresses.append(addr)
+                    logger.info(f"Found I2C device at address: {addr:01x}")
+                except OSError:
+                    continue
+            return addresses
 
 
 def read_byte_register(addr: int, reg: int) -> int:
@@ -33,7 +33,8 @@ def read_byte_register(addr: int, reg: int) -> int:
     :return: Register value
     """
     with _bus_lock:
-        return _bus.read_byte_data(addr, reg)
+        with SMBus(1) as bus:
+            return bus.read_byte_data(addr, reg)
 
 
 def write_byte_register(addr: int, reg: int, value: int) -> None:
@@ -44,7 +45,8 @@ def write_byte_register(addr: int, reg: int, value: int) -> None:
     :param value: Register value to write
     """
     with _bus_lock:
-        _bus.write_byte_data(addr, reg, value)
+        with SMBus(1) as bus:
+            bus.write_byte_data(addr, reg, value)
 
 
 def read_word_register(addr: int, reg: int) -> int:
@@ -55,7 +57,8 @@ def read_word_register(addr: int, reg: int) -> int:
     :return: Register value
     """
     with _bus_lock:
-        return _bus.read_word_data(addr, reg)
+        with SMBus(1) as bus:
+            return bus.read_word_data(addr, reg)
 
 
 def write_word_register(addr: int, reg: int, value: int) -> None:
@@ -67,7 +70,8 @@ def write_word_register(addr: int, reg: int, value: int) -> None:
     :return:
     """
     with _bus_lock:
-        _bus.write_word_data(addr, reg, value)
+        with SMBus(1) as bus:
+            bus.write_word_data(addr, reg, value)
 
 
 # =====================================

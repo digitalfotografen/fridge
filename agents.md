@@ -6,9 +6,24 @@ The fridge is controlled by a Raspberry Pi 4 with a custom interface board.
 The interface board has a SHT30 sensor and a MCP23017 GPIO.
 
 The Raspberry Pi is accessed via SSH, this is configured in the Pycharm project.
+The SSH user and password will be given in the prompts.
 The remote project folder is at /home/[user]/fridge
+Configuration, data, and logs are stored in /home/[user]/fridge_data.
 
-The application must be able to run without interaction with the user or internet access.
+The application must be able to run without network access or user interaction.
+
+Development is done in steps, and the human developer will be the one to decide which steps to take.
+Don't change the code too much, and don't make changes that are not related to the task at hand.
+Keep the codebase clean and maintainable.
+
+For each step,
+- Create a plane
+- Implement tests for the step.
+- Implement the step.
+- Test the step.
+- Update user and developer documentation.
+
+The human developer will handle commits, pull-requests, and merges.
 
 ## Python and Environment
 - **Python Version**: Use Python 3.13+. Raspberry Pi:s current version is 3.13, so ensure this version is supported.

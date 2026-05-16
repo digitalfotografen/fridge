@@ -98,6 +98,9 @@ Cli options are used to control the application.
 - **--show**: Display the current state, temperature, humidity and mode.
 - **--help**: Display this help message.
 
+Configuration files, logs and databases are stored in a folder outside the application with the path ~/fridge_data.
+This makes it possible to update the application without losing the configuration and database.
+
 ## Temperature regulation
 The temperature is regulated using simple on / off logic.
 The regulator has three state engines; ModeState, ActionState and EnergyState.
