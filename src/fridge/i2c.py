@@ -147,7 +147,7 @@ class Sht30:
 
     def read_data(self) -> tuple[float, float]:
         """
-        Featch the last temperature and humidity sample from the SHT30 sensor.
+        Fetch the last temperature and humidity sample from the SHT30 sensor.
         :return: A tuple of temperature and humidity values.
         """
         with _bus_lock:

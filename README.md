@@ -139,6 +139,10 @@ The state is switched to HEATING if the temperature is below the target temperat
 - **HEATING**: The heater is running.
 The state is switched to IDLE if the temperature is above the target temperature plus hysteresis.
 
+The thermostat only applies heater/cooler relay changes when the `ActionState` changes.
+This reduces unnecessary relay writes while still relying on hysteresis for stable control.
+In **IDLE mode**, thermostat thresholds are not used for control decisions and all relays are forced off.
+
 ### EnergyState
 The system can be configured to avoid running the heater and cooler during high-price hours.
 The EnergyState engine is used to switch between the three energy saving states.
@@ -181,4 +185,7 @@ This project uses `uv` for dependency management.
 ```bash
 uv sync
 uv run fridge --help
+
+# Run only hardware-backed thermostat tests on Raspberry Pi
+uv run pytest tests/test_thermostat_hw.py
 
