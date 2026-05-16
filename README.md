@@ -76,6 +76,12 @@ Bit 4: Off LED
 Bit 5: Cool down LED
 Bit 6: Cool LED
 
+The button handler uses radio-button behavior for mode LEDs: when a mode button is pressed,
+its corresponding LED is set and the other mode LEDs are cleared while relay bits remain unchanged.
+The same LED behavior can also be applied programmatically via `ButtonsGpio.set_mode(ModeState)`
+when mode changes are triggered by other parts of the application.
+Button events are handled via MCP23017 port A interrupts routed through INTA on Raspberry Pi GPIO 27 for fast response.
+
 The devices that the relays control are slow and should not be switched too often to avoid damage to the relays or the device.
 The maximum switching frequency is one event per minute.
 

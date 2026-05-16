@@ -1,8 +1,27 @@
 import pytest
 import logging
-from fridge.i2c import i2c_scan
+from unittest.mock import MagicMock
+import fridge.i2c as i2c_module
+from fridge.i2c import i2c_scan, I2cGpio, RelayGpio, ButtonsGpio
+from fridge.enums import ModeState
+from fridge.signals import mode_idle, mode_cooling_down, mode_cool
 
 logger = logging.getLogger(__name__)
+
+
+def test_i2c_scan():
+    """
+    Scan the I2C bus for connected devices.
+    :return:
+    """
+    addresses = i2c_scan()
+    assert 0x20 in addresses  # GPIO expander
+    assert 0x44 in addresses  # SHT30 sensor
+
+
+# =====================================
+# SHT30 Temperature and Humidity Sensor
+# =====================================
 
 
 @pytest.fixture(autouse=True)
@@ -16,14 +35,272 @@ def sht30():
     return Sht30()
 
 
-def test_i2c_scan():
+# =====================================
+# MCP23017 GPIO and RelayGpio
+# =====================================
+
+
+@pytest.fixture
+def mock_gpio(mocker):
     """
-    Scan the I2C bus for connected devices.
-    :return:
+    Fixture to provide a mocked I2cGpio instance for RelayGpio testing.
+    :return: Mocked I2cGpio instance
     """
-    addresses = i2c_scan()
-    assert 0x20 in addresses  # GPIO expander
-    assert 0x44 in addresses  # SHT30 sensor
+    gpio = MagicMock(spec=I2cGpio)
+    gpio.read.return_value = 0x00
+    return gpio
+
+
+def test_relay_gpio_set_cooler_on(mock_gpio):
+    """
+    Test that setting the cooler relay on writes bit 0 high on port B.
+    """
+    relay = RelayGpio(mock_gpio)
+    relay.set_cooler_relay(True)
+    mock_gpio.write.assert_called_once_with("B", 0x01)
+
+
+def test_i2c_gpio_enables_interrupt_for_button_bits(mocker):
+    """
+    I2cGpio should enable port A interrupts for button bits 4-6 only.
+    """
+    write_mock = mocker.patch.object(I2cGpio, "_write_byte_register")
+
+    I2cGpio(interrupt_gpio=27)
+
+    write_mock.assert_any_call(i2c_module.MCP23017_IOCON, 0x04)
+    write_mock.assert_any_call(i2c_module.MCP23017_IODIRA, 0xFF)
+    write_mock.assert_any_call(i2c_module.MCP23017_INTCONA, 0x00)
+    write_mock.assert_any_call(i2c_module.MCP23017_GPINTENA, 0x70)
+    write_mock.assert_any_call(i2c_module.MCP23017_DEFVALA, 0x00)
+    write_mock.assert_any_call(i2c_module.MCP23017_IODIRB, 0x00)
+
+
+def test_buttons_gpio_start_interrupt_listener_handles_button_interrupt(mocker, mock_gpio):
+    """
+    Interrupt listener should call button handling callback on GPIO27 event.
+    """
+
+    class FakeButton:
+        def __init__(self, pin: int, pull_up: bool):
+            self.pin = pin
+            self.pull_up = pull_up
+            self.when_pressed = None
+
+    fake_button = FakeButton(pin=27, pull_up=True)
+    button_cls = mocker.Mock(return_value=fake_button)
+    mocker.patch.object(i2c_module, "GpioZeroButton", button_cls)
+    mock_gpio.clear_port_a_interrupt = mocker.Mock()
+    buttons = ButtonsGpio(mock_gpio)
+    handle_mock = mocker.patch.object(buttons, "handle_button_press", return_value=True)
+
+    assert buttons.start_interrupt_listener(27) is True
+    assert fake_button.pin == 27
+    assert fake_button.pull_up is True
+    assert callable(fake_button.when_pressed)
+
+    fake_button.when_pressed()
+
+    mock_gpio.clear_port_a_interrupt.assert_called_once_with()
+    handle_mock.assert_called_once_with()
+
+
+def test_relay_gpio_set_cooler_off(mock_gpio):
+    """
+    Test that setting the cooler relay off clears bit 0 on port B.
+    """
+    mock_gpio.read.return_value = 0x01  # cooler was on
+    relay = RelayGpio(mock_gpio)
+    relay.set_cooler_relay(False)
+    mock_gpio.write.assert_called_once_with("B", 0x00)
+
+
+def test_relay_gpio_read_cooler(mock_gpio):
+    """
+    Test reading the cooler relay state from port B bit 0.
+    """
+    mock_gpio.read.return_value = 0x01
+    relay = RelayGpio(mock_gpio)
+    assert relay.read_cooler_relay() is True
+
+    mock_gpio.read.return_value = 0x00
+    assert relay.read_cooler_relay() is False
+
+
+def test_relay_gpio_set_heater_on(mock_gpio):
+    """
+    Test that setting the heater relay on writes bit 1 high on port B.
+    """
+    relay = RelayGpio(mock_gpio)
+    relay.set_heater_relay(True)
+    mock_gpio.write.assert_called_once_with("B", 0x02)
+
+
+def test_relay_gpio_set_heater_off(mock_gpio):
+    """
+    Test that setting the heater relay off clears bit 1 on port B.
+    """
+    mock_gpio.read.return_value = 0x02  # heater was on
+    relay = RelayGpio(mock_gpio)
+    relay.set_heater_relay(False)
+    mock_gpio.write.assert_called_once_with("B", 0x00)
+
+
+def test_relay_gpio_read_heater(mock_gpio):
+    """
+    Test reading the heater relay state from port B bit 1.
+    """
+    mock_gpio.read.return_value = 0x02
+    relay = RelayGpio(mock_gpio)
+    assert relay.read_heater_relay() is True
+
+    mock_gpio.read.return_value = 0x00
+    assert relay.read_heater_relay() is False
+
+
+def test_relay_gpio_set_vent_fan_on(mock_gpio):
+    """
+    Test that setting the vent fan relay on writes bit 2 high on port B.
+    """
+    relay = RelayGpio(mock_gpio)
+    relay.set_vent_fan_relay(True)
+    mock_gpio.write.assert_called_once_with("B", 0x04)
+
+
+def test_relay_gpio_set_vent_fan_off(mock_gpio):
+    """
+    Test that setting the vent fan relay off clears bit 2 on port B.
+    """
+    mock_gpio.read.return_value = 0x04  # vent fan was on
+    relay = RelayGpio(mock_gpio)
+    relay.set_vent_fan_relay(False)
+    mock_gpio.write.assert_called_once_with("B", 0x00)
+
+
+def test_relay_gpio_read_vent_fan(mock_gpio):
+    """
+    Test reading the vent fan relay state from port B bit 2.
+    """
+    mock_gpio.read.return_value = 0x04
+    relay = RelayGpio(mock_gpio)
+    assert relay.read_vent_fan_relay() is True
+
+    mock_gpio.read.return_value = 0x00
+    assert relay.read_vent_fan_relay() is False
+
+
+def test_relay_gpio_set_preserves_other_bits(mock_gpio):
+    """
+    Test that setting one relay does not affect the other relay bits.
+    """
+    mock_gpio.read.return_value = 0x06  # heater and vent fan on
+    relay = RelayGpio(mock_gpio)
+    relay.set_cooler_relay(True)
+    mock_gpio.write.assert_called_once_with("B", 0x07)  # all three on
+
+
+def test_buttons_gpio_handle_off_button_sets_only_off_led(mock_gpio):
+    """
+    Off button should set only off LED active and emit idle mode signal.
+    """
+    mock_gpio.read.side_effect = [0xEF, 0x27]  # Port A off pressed, Port B relay bits active
+    buttons = ButtonsGpio(mock_gpio)
+    receiver = MagicMock()
+    mode_idle.connect(receiver)
+
+    try:
+        assert buttons.handle_button_press() is True
+    finally:
+        mode_idle.disconnect(receiver)
+
+    mock_gpio.write.assert_called_once_with("B", 0x17)
+    receiver.assert_called_once_with(buttons)
+
+
+def test_buttons_gpio_handle_cool_down_button_sets_only_cool_down_led(mock_gpio):
+    """
+    Cool down button should set only cool down LED active and emit cooling down signal.
+    """
+    mock_gpio.read.side_effect = [0xDF, 0x17]  # Port A cool down pressed, Port B has other bits
+    buttons = ButtonsGpio(mock_gpio)
+    receiver = MagicMock()
+    mode_cooling_down.connect(receiver)
+
+    try:
+        assert buttons.handle_button_press() is True
+    finally:
+        mode_cooling_down.disconnect(receiver)
+
+    mock_gpio.write.assert_called_once_with("B", 0x27)
+    receiver.assert_called_once_with(buttons)
+
+
+def test_buttons_gpio_handle_cool_button_sets_only_cool_led(mock_gpio):
+    """
+    Cool button should set only cool LED active and emit cool mode signal.
+    """
+    mock_gpio.read.side_effect = [0xBF, 0x07]  # Port A cool pressed
+    buttons = ButtonsGpio(mock_gpio)
+    receiver = MagicMock()
+    mode_cool.connect(receiver)
+
+    try:
+        assert buttons.handle_button_press() is True
+    finally:
+        mode_cool.disconnect(receiver)
+
+    mock_gpio.write.assert_called_once_with("B", 0x47)
+    receiver.assert_called_once_with(buttons)
+
+
+def test_buttons_gpio_handle_button_press_returns_false_when_no_button_pressed(mock_gpio):
+    """
+    No button press should not update LEDs and should not emit a signal.
+    """
+    mock_gpio.read.return_value = 0xFF
+    buttons = ButtonsGpio(mock_gpio)
+    receiver = MagicMock()
+    mode_idle.connect(receiver)
+
+    try:
+        assert buttons.handle_button_press() is False
+    finally:
+        mode_idle.disconnect(receiver)
+
+    mock_gpio.write.assert_not_called()
+    receiver.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("mode", "port_b_before", "expected_write"),
+    [
+        (ModeState.IDLE, 0x27, 0x17),
+        (ModeState.COOL_DOWN, 0x17, 0x27),
+        (ModeState.COOL, 0x07, 0x47),
+    ],
+)
+def test_buttons_gpio_set_mode_updates_leds_for_mode(
+    mode, port_b_before, expected_write, mock_gpio
+):
+    """
+    set_mode should update only mode LED bits according to the mode state.
+    """
+    mock_gpio.read.return_value = port_b_before
+    buttons = ButtonsGpio(mock_gpio)
+
+    buttons.set_mode(mode)
+
+    mock_gpio.write.assert_called_once_with("B", expected_write)
+
+
+def test_buttons_gpio_set_mode_raises_for_unsupported_mode(mock_gpio):
+    """
+    set_mode should raise ValueError for an unsupported mode value.
+    """
+    buttons = ButtonsGpio(mock_gpio)
+
+    with pytest.raises(ValueError, match="Unsupported mode"):
+        buttons.set_mode(99)
 
 
 def test_sht30_crc(sht30):

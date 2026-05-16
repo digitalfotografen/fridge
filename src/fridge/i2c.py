@@ -2,6 +2,13 @@ import logging
 import threading
 from smbus2 import SMBus
 import time
+from fridge.enums import ModeState
+from fridge.signals import mode_idle, mode_cooling_down, mode_cool
+
+try:
+    from gpiozero import Button as GpioZeroButton
+except (ImportError, RuntimeError):
+    GpioZeroButton = None
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +240,8 @@ class I2cGpio:
     GPB0-7 is used as outputs.
     """
 
+    _BUTTON_INTERRUPT_MASK = (1 << 4) | (1 << 5) | (1 << 6)
+
     def __init__(self, addr: int = MCP23017_ADDRESS, interrupt_gpio: int | None = None):
         """
         Initialize the I2cGpio object.
@@ -248,8 +257,8 @@ class I2cGpio:
         self._write_byte_register(MCP23017_IODIRA, 0xFF)
         # Interrupt on change mode
         self._write_byte_register(MCP23017_INTCONA, 0x00)
-        # Disable all interrupts
-        self._write_byte_register(MCP23017_GPINTENA, 0x00)
+        # Enable interrupts for button bits only (GPA4-6)
+        self._write_byte_register(MCP23017_GPINTENA, self._BUTTON_INTERRUPT_MASK)
         # Use 0 as default
         self._write_byte_register(MCP23017_DEFVALA, 0x00)
 
@@ -258,8 +267,8 @@ class I2cGpio:
 
     def read(self, port: str = "A") -> int:
         """
-        Read the all bits of a port and return as an int value.
-        :param port: Return the value of port A or B
+        Read all bits of a port and return as an int value.
+        :param port: Port to read, either ``A`` (inputs) or ``B`` (outputs)
         :return: Port value as an int
         """
         match port:
@@ -267,6 +276,21 @@ class I2cGpio:
                 return read_byte_register(self.addr, MCP23017_GPIOA)
             case "B":
                 return read_byte_register(self.addr, MCP23017_GPIOB)
+            case _:
+                raise ValueError(f"Invalid port {port}. Allowed values are A and B.")
+
+    def write(self, port: str, value: int) -> None:
+        """
+        Write a byte value to all bits of a port.
+        :param port: Port to write, either ``A`` or ``B``
+        :param value: Byte value to write (0–255)
+        :raises ValueError: If port is not ``A`` or ``B``
+        """
+        match port:
+            case "A":
+                self._write_byte_register(MCP23017_OLATA, value)
+            case "B":
+                self._write_byte_register(MCP23017_OLATB, value)
             case _:
                 raise ValueError(f"Invalid port {port}. Allowed values are A and B.")
 
@@ -289,3 +313,235 @@ class I2cGpio:
         with _bus_lock:
             with SMBus(1) as bus:
                 bus.write_byte_data(self.addr, reg, value)
+
+    def clear_port_a_interrupt(self) -> int:
+        """
+        Clear a pending port A interrupt by reading interrupt capture register.
+        :return: Captured state for port A at interrupt time
+        """
+        return self._read_byte_register(MCP23017_INTCAPA)
+
+
+class RelayGpio:
+    """
+    Relay GPIO class for controlling the relays on the fridge.
+    This class provides methods to control the relays on the fridge using the MCP23017 GPIO expander.
+    The relays are connected to the GPIO pins GPB0-2.
+    Bit 0: Cooler relay
+    Bit 1: Heater relay
+    Bit 2: Vent fan relay
+    """
+
+    def __init__(self, gpio: I2cGpio):
+        """
+        This expects an initialized instance of the I2cGpio class.
+        :param gpio: I2cGpio GPIO expander instance
+        """
+        self.gpio = gpio
+
+    _COOLER_BIT = 0
+    _HEATER_BIT = 1
+    _VENT_FAN_BIT = 2
+
+    def _set_relay_bit(self, bit: int, state: bool) -> None:
+        """
+        Set or clear a single relay bit on port B without affecting other bits.
+        :param bit: Bit position (0–7)
+        :param state: ``True`` to activate the relay, ``False`` to deactivate
+        """
+        current = self.gpio.read("B")
+        if state:
+            new_value = current | (1 << bit)
+        else:
+            new_value = current & ~(1 << bit)
+        self.gpio.write("B", new_value)
+
+    def _read_relay_bit(self, bit: int) -> bool:
+        """
+        Read the state of a single relay bit from port B.
+        :param bit: Bit position (0–7)
+        :return: ``True`` if the relay is active, ``False`` otherwise
+        """
+        return bool(self.gpio.read("B") & (1 << bit))
+
+    def set_cooler_relay(self, state: bool) -> None:
+        """
+        Set the cooler relay state.
+        :param state: ``True`` to activate the cooler, ``False`` to deactivate
+        """
+        self._set_relay_bit(self._COOLER_BIT, state)
+
+    def read_cooler_relay(self) -> bool:
+        """
+        Read the current state of the cooler relay.
+        :return: ``True`` if the cooler relay is active, ``False`` otherwise
+        """
+        return self._read_relay_bit(self._COOLER_BIT)
+
+    def set_heater_relay(self, state: bool) -> None:
+        """
+        Set the heater relay state.
+        :param state: ``True`` to activate the heater, ``False`` to deactivate
+        """
+        self._set_relay_bit(self._HEATER_BIT, state)
+
+    def read_heater_relay(self) -> bool:
+        """
+        Read the current state of the heater relay.
+        :return: ``True`` if the heater relay is active, ``False`` otherwise
+        """
+        return self._read_relay_bit(self._HEATER_BIT)
+
+    def set_vent_fan_relay(self, state: bool) -> None:
+        """
+        Set the ventilation fan relay state.
+        :param state: ``True`` to activate the vent fan, ``False`` to deactivate
+        """
+        self._set_relay_bit(self._VENT_FAN_BIT, state)
+
+    def read_vent_fan_relay(self) -> bool:
+        """
+        Read the current state of the ventilation fan relay.
+        :return: ``True`` if the vent fan relay is active, ``False`` otherwise
+        """
+        return self._read_relay_bit(self._VENT_FAN_BIT)
+
+
+class ButtonsGpio:
+    """
+    GPIO interface for buttons and LED indicators.
+    Each button is connected to a GPIO input pin,
+    and each LED indicator is connected to a corresponding GPIO output pin.
+
+    Pressing a button will trigger an interrupt on the GPIO 27 pin.
+    This should light the corresponding LED indicator, snd clear the other LED indicators.
+    It should the issue a corresponding blinker signal to alert other parts of the system.
+
+    The button GPIO pin is configured as an input with pull-up resistor,
+    and the LED GPIO pins are configured as outputs with active-low logic level.
+
+    Port A inputs:
+    Bit 4: Off button
+    Bit 5: Cool down button
+    Bit 6: Cool button
+
+    Port B inputs:
+    Bit 0: Cooler relay
+    Bit 1: Heater relay
+    Bit 2: Vent fan relay
+
+    Note: The GPIO is used for other purposes, don't change other pins
+    """
+
+    def __init__(self, gpio: I2cGpio):
+        """
+        This expects an initialized instance of the I2cGpio class.
+        :param gpio: I2cGpio GPIO expander instance
+        """
+        self.gpio = gpio
+        self._interrupt_button = None
+
+    _OFF_BUTTON_BIT = 4
+    _COOL_DOWN_BUTTON_BIT = 5
+    _COOL_BUTTON_BIT = 6
+
+    _OFF_LED_BIT = 4
+    _COOL_DOWN_LED_BIT = 5
+    _COOL_LED_BIT = 6
+
+    _BUTTON_MASK = (1 << _OFF_BUTTON_BIT) | (1 << _COOL_DOWN_BUTTON_BIT) | (1 << _COOL_BUTTON_BIT)
+    _LED_MASK = (1 << _OFF_LED_BIT) | (1 << _COOL_DOWN_LED_BIT) | (1 << _COOL_LED_BIT)
+
+    def handle_button_press(self) -> bool:
+        """
+        Handle a button press event.
+
+        Reads the button inputs from port A, updates LED outputs on port B
+        so only one mode LED is active at a time, and emits the corresponding
+        mode signal.
+
+        :return: ``True`` if a button press was handled, ``False`` otherwise
+        """
+        input_state = self.gpio.read("A")
+
+        if not (input_state & (1 << self._OFF_BUTTON_BIT)):
+            self._set_active_led(self._OFF_LED_BIT)
+            mode_idle.send(self)
+            return True
+
+        if not (input_state & (1 << self._COOL_DOWN_BUTTON_BIT)):
+            self._set_active_led(self._COOL_DOWN_LED_BIT)
+            mode_cooling_down.send(self)
+            return True
+
+        if not (input_state & (1 << self._COOL_BUTTON_BIT)):
+            self._set_active_led(self._COOL_LED_BIT)
+            mode_cool.send(self)
+            return True
+
+        return False
+
+    def _set_active_led(self, led_bit: int) -> None:
+        """
+        Set one active mode LED while preserving unrelated port B bits.
+        :param led_bit: Bit for LED to activate
+        """
+        current_output = self.gpio.read("B")
+        new_output = (current_output & ~self._LED_MASK) | (1 << led_bit)
+        self.gpio.write("B", new_output)
+
+    def set_mode(self, mode: ModeState) -> None:
+        """
+        Set mode LED indicators based on a mode state.
+
+        This updates only the mode LED bits and preserves all unrelated
+        output bits on port B.
+
+        :param mode: The mode state to indicate
+        :raises ValueError: If ``mode`` is not a supported ``ModeState``
+        """
+        led_bits_by_mode = {
+            ModeState.IDLE: self._OFF_LED_BIT,
+            ModeState.COOL_DOWN: self._COOL_DOWN_LED_BIT,
+            ModeState.COOL: self._COOL_LED_BIT,
+        }
+
+        led_bit = led_bits_by_mode.get(mode)
+        if led_bit is None:
+            raise ValueError(f"Unsupported mode: {mode}")
+
+        self._set_active_led(led_bit)
+
+    def start_interrupt_listener(self, gpio_pin: int = 27) -> bool:
+        """
+        Start Raspberry Pi GPIO interrupt listener for button presses.
+        :param gpio_pin: BCM GPIO pin connected to MCP23017 INTA
+        :return: ``True`` if listener started, ``False`` if GPIO backend unavailable
+        """
+        if GpioZeroButton is None:
+            logger.warning("gpiozero Button backend unavailable, interrupt listener not started")
+            return False
+
+        if self._interrupt_button is not None:
+            return True
+
+        self._interrupt_button = GpioZeroButton(gpio_pin, pull_up=True)
+        self._interrupt_button.when_pressed = self._on_interrupt
+        return True
+
+    def stop_interrupt_listener(self) -> None:
+        """
+        Stop GPIO interrupt listener and release GPIO resources.
+        """
+        if self._interrupt_button is None:
+            return
+
+        self._interrupt_button.close()
+        self._interrupt_button = None
+
+    def _on_interrupt(self) -> None:
+        """
+        Handle MCP23017 interrupt event from GPIO27.
+        """
+        self.gpio.clear_port_a_interrupt()
+        self.handle_button_press()
