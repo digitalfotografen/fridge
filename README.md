@@ -145,8 +145,8 @@ The hysteresis is defined in the configuration file.
 - **COOLING**: The cooler is running.
 The state is switched to IDLE if the temperature is below the target temperature minus the hysteresis.
 - **IDLE**: Heater and cooler are turned off.
-The state is switched to COOLING if the temperature is above the target temperature plus the hysteresis.
-The state is switched to HEATING if the temperature is below the target temperature minus the hysteresis.
+The state is switched to COOLING if the temperature is above the target temperature plus two times the hysteresis.
+The state is switched to HEATING if the temperature is below the target temperature minus two times the hysteresis.
 - **HEATING**: The heater is running.
 The state is switched to IDLE if the temperature is above the target temperature plus hysteresis.
 
@@ -292,30 +292,8 @@ uv run fridge run
 The process runs until it receives `SIGINT` (Ctrl+C) or `SIGTERM`. On shutdown it
 turns off all relays and stops the thermostat loop gracefully.
 
-To run as a systemd service, create a unit file such as `/etc/systemd/system/fridge.service`:
-```ini
-[Unit]
-Description=Fridge Controller
-After=network.target
-
-[Service]
-Type=simple
-User=ulrik
-WorkingDirectory=/home/ulrik/fridge
-ExecStart=/home/ulrik/.local/bin/uv run fridge run
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then enable and start the service:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable fridge.service
-sudo systemctl start fridge.service
-```
+See [Running as a systemd service](#running-as-a-systemd-service) for how to run
+the controller automatically at boot.
 
 ### `test` — Hardware test sequence
 Runs a predefined sequence of hardware checks to verify that all components
@@ -366,6 +344,54 @@ errors without crashing:
 Events such as mode changes and relay switches are logged to a file (default
 `~/fridge.log`) and to the console. The log file path can be changed in the
 `[Logging]` section of the configuration file.
+
+## Running as a systemd service
+
+The repository includes a `fridge.service` unit file for running the controller
+as a systemd service on the Raspberry Pi.
+
+### Installing the service
+Copy the unit file to the systemd configuration directory and reload the daemon:
+```bash
+sudo cp /home/ulrik/fridge/fridge.service /etc/systemd/system/fridge.service
+sudo systemctl daemon-reload
+```
+
+### Enabling the service at boot
+Enable the service so it starts automatically when the Raspberry Pi boots:
+```bash
+sudo systemctl enable fridge.service
+```
+
+To prevent the service from starting at boot:
+```bash
+sudo systemctl disable fridge.service
+```
+
+### Starting and stopping the service
+```bash
+# Start the service
+sudo systemctl start fridge.service
+
+# Stop the service
+sudo systemctl stop fridge.service
+
+# Restart the service (e.g. after a configuration change)
+sudo systemctl restart fridge.service
+
+# Check the service status
+sudo systemctl status fridge.service
+```
+
+### Viewing logs
+The service logs are available via `journalctl`:
+```bash
+# Follow live logs
+sudo journalctl -u fridge.service -f
+
+# Show recent logs
+sudo journalctl -u fridge.service --since "1 hour ago"
+```
 
 ## Development
 

@@ -38,6 +38,7 @@ class ThermostatThresholds:
 
     target_temperature: float | None
     target_humidity: float | None
+    hysteresis: float | None
     heater_on_threshold: float | None
     heater_off_threshold: float | None
     cooler_on_threshold: float | None
@@ -89,6 +90,7 @@ def generate_thresholds(
             return ThermostatThresholds(
                 target_temperature=None,
                 target_humidity=None,
+                hysteresis=None,
                 heater_on_threshold=None,
                 heater_off_threshold=None,
                 cooler_on_threshold=None,
@@ -115,6 +117,7 @@ def generate_thresholds(
             return ThermostatThresholds(
                 target_temperature=target_temperature,
                 target_humidity=None,
+                hysteresis=hysteresis,
                 heater_on_threshold=heater_target - hysteresis,
                 heater_off_threshold=heater_target + hysteresis,
                 cooler_on_threshold=cooler_target + hysteresis,
@@ -156,6 +159,7 @@ def generate_thresholds(
             return ThermostatThresholds(
                 target_temperature=target_temperature,
                 target_humidity=target_humidity,
+                hysteresis=hysteresis,
                 heater_on_threshold=max(freeze_guard, heater_target - hysteresis),
                 heater_off_threshold=max(freeze_guard, heater_target + hysteresis),
                 cooler_on_threshold=cooler_target + hysteresis,
@@ -481,28 +485,37 @@ class Thermostat:
                 case ModeState.COOL_DOWN | ModeState.COOL:
                     next_action = self._action_state
 
-                    if (
-                        self.thresholds.cooler_on_threshold is not None
-                        and self._temperature >= self.thresholds.cooler_on_threshold
-                    ):
-                        next_action = ActionState.COOLING
-                    elif (
-                        self.thresholds.heater_on_threshold is not None
-                        and self._temperature <= self.thresholds.heater_on_threshold
-                    ):
-                        next_action = ActionState.HEATING
-                    elif (
-                        self._action_state == ActionState.COOLING
-                        and self.thresholds.cooler_off_threshold is not None
-                        and self._temperature <= self.thresholds.cooler_off_threshold
-                    ):
-                        next_action = ActionState.IDLE
-                    elif (
-                        self._action_state == ActionState.HEATING
-                        and self.thresholds.heater_off_threshold is not None
-                        and self._temperature >= self.thresholds.heater_off_threshold
-                    ):
-                        next_action = ActionState.IDLE
+                    match self._action_state:
+                        case ActionState.IDLE:
+                            if (
+                                self.thresholds.cooler_on_threshold is not None
+                                and self.thresholds.hysteresis is not None
+                                and self._temperature
+                                >= self.thresholds.cooler_on_threshold + self.thresholds.hysteresis
+                            ):
+                                next_action = ActionState.COOLING
+                            elif (
+                                self.thresholds.heater_on_threshold is not None
+                                and self.thresholds.hysteresis is not None
+                                and self._temperature
+                                <= self.thresholds.heater_on_threshold - self.thresholds.hysteresis
+                            ):
+                                next_action = ActionState.HEATING
+
+                        case ActionState.COOLING:
+                            if (
+                                self.thresholds.cooler_off_threshold is not None
+                                and self._temperature <= self.thresholds.cooler_off_threshold
+                            ):
+                                next_action = ActionState.IDLE
+
+                        case ActionState.HEATING:
+                            if (
+                                self.thresholds.heater_off_threshold is not None
+                                and self._temperature >= self.thresholds.heater_off_threshold
+                            ):
+                                next_action = ActionState.IDLE
+
                     self._set_action_state(next_action)
 
             self._check_cool_down_auto_switch()

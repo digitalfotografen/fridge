@@ -514,6 +514,221 @@ def test_thermostat_defaults_action_state_to_idle_when_not_cached(
 
 
 # ---------------------------------------------------------------------------
+# IDLE dead band tests – IDLE uses 2× hysteresis for transitions
+# ---------------------------------------------------------------------------
+
+
+def test_idle_to_cooling_requires_two_times_hysteresis(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """From IDLE, cooling should only start when temp >= target + 2*hysteresis.
+
+    CoolMode defaults: target=5.0, hysteresis=1.5.
+    Old threshold was 6.5 (target + hyst); new threshold is 8.0 (target + 2*hyst).
+    At 7.9 the thermostat must stay IDLE; at 8.1 it must switch to COOLING.
+    """
+    thermostat, relay, sensor, _cache = thermostat_testbed
+    thermostat.set_mode(ModeState.COOL)
+
+    # 7.9 is above old threshold (6.5) but below new threshold (8.0) → stay IDLE
+    sensor._readings = [(7.9, 40.0), (7.9, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.04)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.action_state == ActionState.IDLE
+    assert relay.cooler is False
+
+
+def test_idle_to_cooling_triggers_at_two_times_hysteresis(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """From IDLE, cooling should start when temp >= target + 2*hysteresis.
+
+    CoolMode defaults: target=5.0, hysteresis=1.5 → threshold=8.0.
+    """
+    thermostat, relay, sensor, _cache = thermostat_testbed
+    thermostat.set_mode(ModeState.COOL)
+
+    sensor._readings = [(8.1, 40.0), (8.1, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.04)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.action_state == ActionState.COOLING
+    assert relay.cooler is True
+
+
+def test_idle_to_heating_requires_two_times_hysteresis(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """From IDLE, heating should only start when temp <= target - 2*hysteresis.
+
+    CoolMode defaults: target=5.0, hysteresis=1.5.
+    Old threshold was 3.5 (target - hyst); new threshold is 2.0 (target - 2*hyst).
+    At 2.1 the thermostat must stay IDLE; at 1.9 it must switch to HEATING.
+    """
+    thermostat, relay, sensor, _cache = thermostat_testbed
+    thermostat.set_mode(ModeState.COOL)
+
+    # 2.1 is below old threshold (3.5) but above new threshold (2.0) → stay IDLE
+    sensor._readings = [(2.1, 40.0), (2.1, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.04)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.action_state == ActionState.IDLE
+    assert relay.heater is False
+
+
+def test_idle_to_heating_triggers_at_two_times_hysteresis(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """From IDLE, heating should start when temp <= target - 2*hysteresis.
+
+    CoolMode defaults: target=5.0, hysteresis=1.5 → threshold=2.0.
+    """
+    thermostat, relay, sensor, _cache = thermostat_testbed
+    thermostat.set_mode(ModeState.COOL)
+
+    sensor._readings = [(1.9, 40.0), (1.9, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.04)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.action_state == ActionState.HEATING
+    assert relay.heater is True
+
+
+def test_no_direct_cooling_to_heating_transition(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """Transitions must go through IDLE; COOLING must not jump directly to HEATING.
+
+    Start in COOLING with a very low temperature that would previously
+    trigger HEATING directly. Now it should go to IDLE instead.
+    """
+    thermostat, relay, sensor, _cache = thermostat_testbed
+    thermostat.set_mode(ModeState.COOL)
+    thermostat._action_state = ActionState.COOLING
+
+    # cooler_off_threshold = 5.0 - 1.5 = 3.5; temp 2.5 is below that → IDLE
+    # With old logic, temp 2.5 would also be below heater_on (3.5) → direct HEATING
+    # New logic: COOLING can only go to IDLE, and 2.5 > 2.0 (IDLE→HEATING threshold)
+    # so it stays IDLE
+    sensor._readings = [(2.5, 40.0), (2.5, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.04)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.action_state == ActionState.IDLE
+
+
+def test_no_direct_heating_to_cooling_transition(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """Transitions must go through IDLE; HEATING must not jump directly to COOLING.
+
+    Start in HEATING with a very high temperature that would previously
+    trigger COOLING directly. Now it should go to IDLE instead.
+    """
+    thermostat, relay, sensor, _cache = thermostat_testbed
+    thermostat.set_mode(ModeState.COOL)
+    thermostat._action_state = ActionState.HEATING
+
+    # heater_off_threshold = 5.0 + 1.5 = 6.5; temp 7.5 is above that → IDLE
+    # With old logic, temp 7.5 would also be above cooler_on (6.5) → direct COOLING
+    # New logic: HEATING can only go to IDLE, and 7.5 < 8.0 (IDLE→COOLING threshold)
+    # so it stays IDLE
+    sensor._readings = [(7.5, 40.0), (7.5, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.04)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.action_state == ActionState.IDLE
+
+
+def test_cooling_to_idle_still_uses_one_times_hysteresis(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """COOLING → IDLE transition should still use target - hysteresis (not 2×).
+
+    CoolMode defaults: target=5.0, hysteresis=1.5 → cooler_off=3.5.
+    Temp 3.4 should switch to IDLE.
+    """
+    thermostat, relay, sensor, _cache = thermostat_testbed
+    thermostat.set_mode(ModeState.COOL)
+    thermostat._action_state = ActionState.COOLING
+
+    sensor._readings = [(3.4, 40.0), (3.4, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.04)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.action_state == ActionState.IDLE
+
+
+def test_heating_to_idle_still_uses_one_times_hysteresis(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """HEATING → IDLE transition should still use target + hysteresis (not 2×).
+
+    CoolMode defaults: target=5.0, hysteresis=1.5 → heater_off=6.5.
+    Temp 6.6 should switch to IDLE.
+    """
+    thermostat, relay, sensor, _cache = thermostat_testbed
+    thermostat.set_mode(ModeState.COOL)
+    thermostat._action_state = ActionState.HEATING
+
+    sensor._readings = [(6.6, 40.0), (6.6, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.04)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.action_state == ActionState.IDLE
+
+
+def test_generate_thresholds_includes_hysteresis_field() -> None:
+    """generate_thresholds should include the hysteresis value for loop calculations."""
+    config = _load_default_config()
+
+    cool_thresholds = generate_thresholds(config, ModeState.COOL, EnergyState.NORMAL_PRICE)
+    assert cool_thresholds.hysteresis == 1.5
+
+    cool_down_thresholds = generate_thresholds(
+        config, ModeState.COOL_DOWN, EnergyState.NORMAL_PRICE
+    )
+    assert cool_down_thresholds.hysteresis == 1.5
+
+    idle_thresholds = generate_thresholds(config, ModeState.IDLE, EnergyState.NORMAL_PRICE)
+    assert idle_thresholds.hysteresis is None
+
+
+# ---------------------------------------------------------------------------
 # Logging tests
 # ---------------------------------------------------------------------------
 
