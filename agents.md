@@ -25,6 +25,11 @@ For each step,
 
 The human developer will handle commits, pull-requests, and merges.
 
+This application is designed to be run on a Raspberry Pi 4 with a custom interface board.
+The human developer will supply instructions for how to reach the Raspberry Pi via SSH.
+Please ask if the human developer forget to include this in task. This should not be saved or pushed to github
+
+
 ## Python and Environment
 - **Python Version**: Use Python 3.13+. Raspberry Pi:s current version is 3.13, so ensure this version is supported.
 - **Environment Management**: Use `uv` to manage Python versions and run the application (e.g., `uv run`).
@@ -43,6 +48,7 @@ Use `uv` for dependency management and `pyproject.toml` for package metadata.
 
 ## Testing
 Use TDD - always write tests before writing code.
+Don't run the test locally, run all tests on the Raspberry Pi.
 
 - **Test Framework**: Use `pytest`.
 - **Async Testing**: Use `pytest-asyncio` and `asyncmock`.

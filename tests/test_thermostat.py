@@ -146,6 +146,7 @@ class _FakeRelay:
 class _FakeCache:
     def __init__(self) -> None:
         self.values: dict[str, object] = {}
+        self.close_calls = 0
 
     def get(self, key: str, default: object = None) -> object:
         return self.values.get(key, default)
@@ -156,6 +157,9 @@ class _FakeCache:
     def delete(self, key: str) -> bool:
         """Remove a key from the cache, return True if it existed."""
         return self.values.pop(key, None) is not None
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 @pytest.fixture
@@ -236,6 +240,16 @@ def test_start_and_stop_are_idempotent(
     assert relay.cooler is False
     assert relay.heater is False
     assert relay.fan is False
+
+
+def test_stop_closes_cache(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    thermostat, _relay, _sensor, cache = thermostat_testbed
+
+    thermostat.stop()
+
+    assert cache.close_calls == 1
 
 
 def _make_rate_limited_testbed(

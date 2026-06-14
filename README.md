@@ -65,6 +65,10 @@ A MCP23017 is used as GPIO expander, this is connected via I2C at address 0x20.
 
 Port A is used for inputs (buttons).
 The INTA pin is connected to GPIO 27 and is used to generate interrupts when a user presses a button.
+Bit 0: Not used
+Bit 1: Not used
+Bit 2: Not used
+Bit 3: Not used
 Bit 4: Off button
 Bit 5: Cool down button
 Bit 6: Cool button
@@ -75,6 +79,7 @@ Both relays and LED:s are active low (open collector) and are grounded when the 
 Bit 0: Cooler relay
 Bit 1: Heater relay
 Bit 2: Vent fan relay
+Bit 3: Reserved
 Bit 4: Off LED
 Bit 5: Cool down LED
 Bit 6: Cool LED

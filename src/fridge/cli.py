@@ -93,6 +93,7 @@ def _setup_logging(config: ConfigParser, data_dir: str) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
         handlers=[
             logging.FileHandler(log_file),
             logging.StreamHandler(),
@@ -148,47 +149,50 @@ def show():
     expanded_cache = os.path.expanduser(cache_path)
     cache = Cache(expanded_cache)
 
-    click.echo("=== Relay States ===")
-    click.echo(f"  Cooler : {'ON' if relay.read_cooler_relay() else 'OFF'}")
-    click.echo(f"  Heater : {'ON' if relay.read_heater_relay() else 'OFF'}")
-    click.echo(f"  Fan    : {'ON' if relay.read_vent_fan_relay() else 'OFF'}")
-
-    click.echo("")
-    click.echo("=== LED States ===")
-    port_b = gpio.read("B")
-    click.echo(f"  Off LED       : {'ON' if port_b & (1 << 4) else 'OFF'}")
-    click.echo(f"  Cool Down LED : {'ON' if port_b & (1 << 5) else 'OFF'}")
-    click.echo(f"  Cool LED      : {'ON' if port_b & (1 << 6) else 'OFF'}")
-
-    click.echo("")
-    click.echo("=== Button States ===")
-    port_a = gpio.read("A")
-    click.echo(f"  Off       : {'PRESSED' if not (port_a & (1 << 4)) else 'released'}")
-    click.echo(f"  Cool Down : {'PRESSED' if not (port_a & (1 << 5)) else 'released'}")
-    click.echo(f"  Cool      : {'PRESSED' if not (port_a & (1 << 6)) else 'released'}")
-
-    click.echo("")
-    click.echo("=== Cached State ===")
-    mode = cache.get("mode")
-    action = cache.get("action_state")
-    energy = cache.get("energy_state")
-    click.echo(f"  Mode         : {ModeState(mode).name if mode is not None else 'N/A'}")
-    click.echo(f"  Action       : {ActionState(action).name if action is not None else 'N/A'}")
-    click.echo(f"  Energy       : {EnergyState(energy).name if energy is not None else 'N/A'}")
-
-    cool_down_start = cache.get("cool_down_start")
-    if cool_down_start is not None:
-        click.echo(f"  Cool-down started at: {cool_down_start}")
-
-    click.echo("")
-    click.echo("=== Sensor Readings ===")
     try:
-        sensor = Sht30()
-        temperature, humidity = sensor.read_data()
-        click.echo(f"  Temperature : {temperature:.1f} °C")
-        click.echo(f"  Humidity    : {humidity:.1f} %")
-    except Exception as exc:
-        click.echo(f"  Error reading sensor: {exc}")
+        click.echo("=== Relay States ===")
+        click.echo(f"  Cooler : {'ON' if relay.read_cooler_relay() else 'OFF'}")
+        click.echo(f"  Heater : {'ON' if relay.read_heater_relay() else 'OFF'}")
+        click.echo(f"  Fan    : {'ON' if relay.read_vent_fan_relay() else 'OFF'}")
+
+        click.echo("")
+        click.echo("=== LED States ===")
+        port_b = gpio.read("B")
+        click.echo(f"  Off LED       : {'ON' if port_b & (1 << 4) else 'OFF'}")
+        click.echo(f"  Cool Down LED : {'ON' if port_b & (1 << 5) else 'OFF'}")
+        click.echo(f"  Cool LED      : {'ON' if port_b & (1 << 6) else 'OFF'}")
+
+        click.echo("")
+        click.echo("=== Button States ===")
+        port_a = gpio.read("A")
+        click.echo(f"  Off       : {'PRESSED' if not (port_a & (1 << 4)) else 'released'}")
+        click.echo(f"  Cool Down : {'PRESSED' if not (port_a & (1 << 5)) else 'released'}")
+        click.echo(f"  Cool      : {'PRESSED' if not (port_a & (1 << 6)) else 'released'}")
+
+        click.echo("")
+        click.echo("=== Cached State ===")
+        mode = cache.get("mode")
+        action = cache.get("action_state")
+        energy = cache.get("energy_state")
+        click.echo(f"  Mode         : {ModeState(mode).name if mode is not None else 'N/A'}")
+        click.echo(f"  Action       : {ActionState(action).name if action is not None else 'N/A'}")
+        click.echo(f"  Energy       : {EnergyState(energy).name if energy is not None else 'N/A'}")
+
+        cool_down_start = cache.get("cool_down_start")
+        if cool_down_start is not None:
+            click.echo(f"  Cool-down started at: {cool_down_start}")
+
+        click.echo("")
+        click.echo("=== Sensor Readings ===")
+        try:
+            sensor = Sht30()
+            temperature, humidity = sensor.read_data()
+            click.echo(f"  Temperature : {temperature:.1f} °C")
+            click.echo(f"  Humidity    : {humidity:.1f} %")
+        except Exception as exc:
+            click.echo(f"  Error reading sensor: {exc}")
+    finally:
+        cache.close()
 
 
 @cli.command()
@@ -216,49 +220,51 @@ def run():
     thermostat = Thermostat(gpio=gpio, config=cfg)
     buttons = ButtonsGpio(gpio)
 
-    # Connect blinker signals to thermostat and button LEDs
-    def _on_mode_idle(sender, **kwargs):
-        logger.info("Mode changed to IDLE")
-        thermostat.set_mode(ModeState.IDLE)
-        buttons.set_mode(ModeState.IDLE)
+    try:
+        # Connect blinker signals to thermostat and button LEDs
+        def _on_mode_idle(sender, **kwargs):
+            logger.info("Mode changed to IDLE")
+            thermostat.set_mode(ModeState.IDLE)
+            buttons.set_mode(ModeState.IDLE)
 
-    def _on_mode_cool_down(sender, **kwargs):
-        logger.info("Mode changed to COOL_DOWN")
-        thermostat.set_mode(ModeState.COOL_DOWN)
-        buttons.set_mode(ModeState.COOL_DOWN)
+        def _on_mode_cool_down(sender, **kwargs):
+            logger.info("Mode changed to COOL_DOWN")
+            thermostat.set_mode(ModeState.COOL_DOWN)
+            buttons.set_mode(ModeState.COOL_DOWN)
 
-    def _on_mode_cool(sender, **kwargs):
-        logger.info("Mode changed to COOL")
-        thermostat.set_mode(ModeState.COOL)
-        buttons.set_mode(ModeState.COOL)
+        def _on_mode_cool(sender, **kwargs):
+            logger.info("Mode changed to COOL")
+            thermostat.set_mode(ModeState.COOL)
+            buttons.set_mode(ModeState.COOL)
 
-    mode_idle.connect(_on_mode_idle)
-    mode_cooling_down.connect(_on_mode_cool_down)
-    mode_cool.connect(_on_mode_cool)
+        mode_idle.connect(_on_mode_idle)
+        mode_cooling_down.connect(_on_mode_cool_down)
+        mode_cool.connect(_on_mode_cool)
 
-    # Set initial LED state from cached mode
-    buttons.set_mode(thermostat.get_mode())
+        # Set initial LED state from cached mode
+        buttons.set_mode(thermostat.get_mode())
 
-    # Start components
-    thermostat.start()
-    buttons.start_interrupt_listener()
+        # Start components
+        thermostat.start()
+        buttons.start_interrupt_listener()
 
-    logger.info("Fridge controller running (press Ctrl+C to stop)")
+        logger.info("Fridge controller running (press Ctrl+C to stop)")
 
-    # Block until SIGINT / SIGTERM
-    shutdown_event = threading.Event()
+        # Block until SIGINT / SIGTERM
+        shutdown_event = threading.Event()
 
-    def _handle_signal(signum, frame):
-        logger.info("Received signal %s, shutting down", signum)
-        shutdown_event.set()
+        def _handle_signal(signum, frame):
+            logger.info("Received signal %s, shutting down", signum)
+            shutdown_event.set()
 
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGTERM, _handle_signal)
+        signal.signal(signal.SIGINT, _handle_signal)
+        signal.signal(signal.SIGTERM, _handle_signal)
 
-    shutdown_event.wait()
-
-    # Graceful shutdown
-    logger.info("Stopping fridge controller")
-    thermostat.stop()
-    buttons.stop_interrupt_listener()
-    logger.info("Fridge controller stopped")
+        shutdown_event.wait()
+    finally:
+        # Graceful shutdown
+        logger.info("Stopping fridge controller")
+        thermostat.stop()
+        buttons.stop_interrupt_listener()
+        logger.info("Fridge controller stopped")
+        logging.shutdown()

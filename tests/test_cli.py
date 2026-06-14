@@ -1,3 +1,4 @@
+import logging
 from configparser import ConfigParser
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -5,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from fridge.cli import cli
+from fridge.cli import _setup_logging, cli
 
 
 @pytest.fixture
@@ -95,6 +96,22 @@ def test_config_creates_data_dir_if_missing(runner: CliRunner, tmp_path: Path) -
     assert result.exit_code == 0
     assert data_dir.exists()
     assert (data_dir / "fridge.ini").exists()
+
+
+def test_setup_logging_forces_reconfiguration(tmp_path: Path) -> None:
+    """_setup_logging forces logging reconfiguration to avoid leaking unused handlers."""
+    config = ConfigParser()
+    config.add_section("Logging")
+    config.set("Logging", "log_file", "fridge.log")
+
+    with (
+        patch("fridge.cli.logging.basicConfig") as mock_basic_config,
+        patch("fridge.cli.logging.FileHandler"),
+        patch("fridge.cli.logging.StreamHandler"),
+    ):
+        _setup_logging(config, str(tmp_path))
+
+    assert mock_basic_config.call_args.kwargs["force"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +244,7 @@ def test_run_starts_and_stops_thermostat(runner: CliRunner, tmp_data_dir: Path) 
         patch("fridge.cli.load_config") as mock_load_config,
         patch("fridge.cli.signal"),
         patch("fridge.cli.threading") as mock_threading,
+        patch("fridge.cli.logging.shutdown", wraps=logging.shutdown) as mock_logging_shutdown,
     ):
         mock_load_config.return_value = ConfigParser()
         # Make the shutdown event fire immediately
@@ -240,3 +258,4 @@ def test_run_starts_and_stops_thermostat(runner: CliRunner, tmp_data_dir: Path) 
     mock_thermostat.start.assert_called_once()
     mock_thermostat.stop.assert_called_once()
     mock_buttons.stop_interrupt_listener.assert_called_once()
+    mock_logging_shutdown.assert_called_once()

@@ -176,7 +176,9 @@ class Thermostat:
         self.config = config
         self.sensor = Sht30()
         self.relay = RelayGpio(gpio)
-        self.cache = Cache(os.path.expanduser(cache_path))
+        self._cache_dir = os.path.expanduser(cache_path)
+        self.cache = Cache(self._cache_dir)
+        self._cache_closed = False
         self.mode = self.cache.get("mode", ModeState.IDLE)
         self.energy_state = self.cache.get("energy_state", EnergyState.NORMAL_PRICE)
         self.thresholds = generate_thresholds(
@@ -199,10 +201,17 @@ class Thermostat:
         )
         self._last_relay_switch: dict[str, float] = {}
 
+    def _ensure_cache_open(self) -> None:
+        """Re-open the cache if it was previously closed."""
+        if self._cache_closed:
+            self.cache = Cache(self._cache_dir)
+            self._cache_closed = False
+
     def start(self) -> None:
         """
         Start the thermostat loop to continuously monitor and control the fridge.
         """
+        self._ensure_cache_open()
         if self._thread is not None and self._thread.is_alive():
             return
         self.stop_event.clear()
@@ -220,6 +229,9 @@ class Thermostat:
         self._set_action_state(ActionState.IDLE)
         self._set_relays(cooler=False, heater=False)
         self.relay.set_vent_fan_relay(False)
+        if not self._cache_closed:
+            self.cache.close()
+            self._cache_closed = True
 
     @property
     def action_state(self) -> ActionState:
@@ -253,6 +265,7 @@ class Thermostat:
         :param mode: New mode
         :return:
         """
+        self._ensure_cache_open()
         self.mode = mode
         self.cache.set("mode", mode)
 
@@ -280,6 +293,7 @@ class Thermostat:
         :param energy_state: New energy state
         :return:
         """
+        self._ensure_cache_open()
         self.energy_state = energy_state
         self.cache.set("energy_state", energy_state)
         self.thresholds = generate_thresholds(
@@ -307,6 +321,7 @@ class Thermostat:
         :param action_state: New action state
         :return:
         """
+        self._ensure_cache_open()
         self._action_state = action_state
         self.cache.set("action_state", action_state)
         self._set_relays(
