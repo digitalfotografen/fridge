@@ -10,6 +10,7 @@ import shutil
 import signal
 import threading
 from configparser import ConfigParser
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -180,7 +181,8 @@ def show():
 
         cool_down_start = cache.get("cool_down_start")
         if cool_down_start is not None:
-            click.echo(f"  Cool-down started at: {cool_down_start}")
+            formatted = datetime.fromtimestamp(cool_down_start).strftime("%Y-%m-%d %H:%M:%S")
+            click.echo(f"  Cool-down started at: {formatted}")
 
         click.echo("")
         click.echo("=== Sensor Readings ===")

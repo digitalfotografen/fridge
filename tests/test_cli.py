@@ -1,5 +1,6 @@
 import logging
 from configparser import ConfigParser
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -180,6 +181,39 @@ def test_show_does_not_write_gpio(runner: CliRunner) -> None:
     mock_relay.set_cooler_relay.assert_not_called()
     mock_relay.set_heater_relay.assert_not_called()
     mock_relay.set_vent_fan_relay.assert_not_called()
+
+
+def test_show_displays_cool_down_start_as_swedish_datetime(runner: CliRunner) -> None:
+    """show command formats cool_down_start timestamp as Swedish datetime."""
+    mock_gpio = MagicMock()
+    mock_gpio.read.return_value = 0x00
+
+    with (
+        patch("fridge.cli.I2cGpio", return_value=mock_gpio),
+        patch("fridge.cli.RelayGpio") as mock_relay_cls,
+        patch("fridge.cli.Cache") as mock_cache_cls,
+        patch("fridge.cli.Sht30") as mock_sht30_cls,
+    ):
+        mock_relay = mock_relay_cls.return_value
+        mock_relay.read_cooler_relay.return_value = False
+        mock_relay.read_heater_relay.return_value = False
+        mock_relay.read_vent_fan_relay.return_value = False
+
+        mock_cache = mock_cache_cls.return_value
+        # Return a known timestamp for cool_down_start, None for others
+        mock_cache.get.side_effect = lambda key: (
+            1781465818.2116003 if key == "cool_down_start" else None
+        )
+
+        mock_sht30_cls.return_value.read_data.return_value = (5.0, 50.0)
+
+        result = runner.invoke(cli, ["show"])
+
+    assert result.exit_code == 0
+    expected = datetime.fromtimestamp(1781465818.2116003).strftime("%Y-%m-%d %H:%M:%S")
+    assert f"Cool-down started at: {expected}" in result.output
+    # Ensure the raw timestamp is NOT shown
+    assert "1781465818" not in result.output
 
 
 def test_show_sensor_error_handled(runner: CliRunner) -> None:
