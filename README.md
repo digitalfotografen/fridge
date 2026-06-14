@@ -324,6 +324,18 @@ thermostat state (mode, action state, energy state and cool-down timer) in
 `~/fridge_data/cache/`. This ensures that the fridge resumes its previous operating
 mode after a power loss or restart.
 
+## Error handling and resilience
+The application is designed to run unattended and recover from transient I2C bus
+errors without crashing:
+
+- **Sensor reads** – `Sht30.read_data()` retries up to 3 times with a short delay
+  before giving up. If all retries fail, the thermostat loop logs a warning and
+  skips the current cycle instead of terminating the thread.
+- **Button interrupts** – The interrupt handler reads the MCP23017 INTCAP register
+  (captured pin state at interrupt time) so that a quick button release does not
+  cause the press to be missed. I2C errors during interrupt handling are caught
+  and logged.
+
 ## Logging
 Events such as mode changes and relay switches are logged to a file (default
 `~/fridge.log`) and to the console. The log file path can be changed in the

@@ -1,14 +1,18 @@
-from configparser import ConfigParser
-from diskcache import Cache
-from dataclasses import dataclass
+import logging
 import math
 import os
 import threading
 import time
+from configparser import ConfigParser
+from dataclasses import dataclass
+
+from diskcache import Cache
 
 from fridge import ModeState, ActionState, EnergyState
 from fridge import cache_path
 from fridge import Sht30, RelayGpio, I2cGpio
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_COOL_DOWN_TARGET_TEMPERATURE = 12.0
@@ -180,7 +184,13 @@ class Thermostat:
         )
         self._temperature = math.nan
         self._humidity = math.nan
-        self._action_state = ActionState.IDLE
+        self._action_state = self.cache.get("action_state", ActionState.IDLE)
+        logger.info(
+            "Restored state from cache: mode=%s, energy_state=%s, action_state=%s",
+            self.mode.name,
+            self.energy_state.name,
+            self._action_state.name,
+        )
         self.stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self.refresh_rate = self.config.getfloat("General", "refresh_rate", fallback=1.0)
@@ -400,12 +410,18 @@ class Thermostat:
         if elapsed_hours >= auto_switch_hours:
             self.set_mode(ModeState.COOL)
 
-    def _read_sensor(self) -> None:
+    def _read_sensor(self) -> bool:
         """
         Read temperature and humidity from the sensor.
-        :return:
+
+        :return: ``True`` if the read succeeded, ``False`` on I/O error
         """
-        self._temperature, self._humidity = self.sensor.read_data()
+        try:
+            self._temperature, self._humidity = self.sensor.read_data()
+            return True
+        except OSError:
+            logger.warning("Failed to read sensor data, skipping this cycle")
+            return False
 
     def _loop(self) -> None:
         """
@@ -419,7 +435,9 @@ class Thermostat:
         :return:
         """
         while not self.stop_event.is_set():
-            self._read_sensor()
+            if not self._read_sensor():
+                time.sleep(self.refresh_rate)
+                continue
             self._set_fan_relay()  # this has internal mode handling
 
             match self.mode:

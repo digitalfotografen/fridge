@@ -462,3 +462,80 @@ def test_auto_switch_does_not_trigger_before_timeout(
     thread.join(timeout=1)
 
     assert thermostat.mode == ModeState.COOL_DOWN
+
+
+# ---------------------------------------------------------------------------
+# State persistence tests
+# ---------------------------------------------------------------------------
+
+
+def test_thermostat_restores_action_state_from_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thermostat should restore action_state from cache on init."""
+    relay = _FakeRelay()
+    sensor = _FakeSensor([(20.0, 40.0)])
+    cache = _FakeCache()
+    cache.values["action_state"] = ActionState.COOLING
+    cache.values["mode"] = ModeState.COOL
+
+    monkeypatch.setattr("fridge.thermostat.Sht30", lambda: sensor)
+    monkeypatch.setattr("fridge.thermostat.RelayGpio", lambda _gpio: relay)
+    monkeypatch.setattr("fridge.thermostat.Cache", lambda _path: cache)
+
+    config = _load_default_config()
+    thermostat = Thermostat(gpio=cast(object, None), config=config)
+
+    assert thermostat.action_state == ActionState.COOLING
+    assert thermostat.mode == ModeState.COOL
+
+
+def test_thermostat_defaults_action_state_to_idle_when_not_cached(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """Thermostat should default to IDLE when action_state is not in cache."""
+    thermostat, _relay, _sensor, _cache = thermostat_testbed
+    assert thermostat.action_state == ActionState.IDLE
+
+
+# ---------------------------------------------------------------------------
+# Sensor error handling tests
+# ---------------------------------------------------------------------------
+
+
+def test_thermostat_loop_survives_sensor_read_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thermostat loop should not crash when the sensor raises OSError."""
+    relay = _FakeRelay()
+    cache = _FakeCache()
+
+    call_count = 0
+
+    class _FlakySensor:
+        def read_data(self) -> tuple[float, float]:
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise OSError("Input/output error")
+            return 20.0, 40.0
+
+    monkeypatch.setattr("fridge.thermostat.Sht30", lambda: _FlakySensor())
+    monkeypatch.setattr("fridge.thermostat.RelayGpio", lambda _gpio: relay)
+    monkeypatch.setattr("fridge.thermostat.Cache", lambda _path: cache)
+
+    config = _load_default_config()
+    config.set("General", "refresh_rate", "0.01")
+    config.set("General", "min_relay_interval", "0")
+
+    thermostat = Thermostat(gpio=cast(object, None), config=config)
+    thermostat.set_mode(ModeState.COOL)
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.1)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thread.is_alive() is False
+    assert call_count >= 3

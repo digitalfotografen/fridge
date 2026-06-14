@@ -145,10 +145,41 @@ class Sht30:
                 )
         time.sleep(0.01)
 
+    _READ_RETRIES = 3
+    _RETRY_DELAY = 0.05
+
     def read_data(self) -> tuple[float, float]:
         """
         Fetch the last temperature and humidity sample from the SHT30 sensor.
+
+        The method retries up to :attr:`_READ_RETRIES` times on transient
+        I/O errors before re-raising the last exception.
+
         :return: A tuple of temperature and humidity values.
+        :raises OSError: If all retry attempts fail.
+        """
+        last_error: OSError | None = None
+        for attempt in range(self._READ_RETRIES):
+            try:
+                return self._fetch_sample()
+            except OSError as exc:
+                last_error = exc
+                logger.warning(
+                    "SHT30 read attempt %d/%d failed: %s",
+                    attempt + 1,
+                    self._READ_RETRIES,
+                    exc,
+                )
+                time.sleep(self._RETRY_DELAY)
+        raise last_error  # type: ignore[misc]
+
+    def _fetch_sample(self) -> tuple[float, float]:
+        """
+        Perform a single fetch of temperature and humidity from the sensor.
+
+        :return: A tuple of temperature and humidity values.
+        :raises OSError: On I2C communication failure.
+        :raises ValueError: On CRC check failure.
         """
         with _bus_lock:
             with SMBus(1) as bus:
@@ -452,17 +483,19 @@ class ButtonsGpio:
     _BUTTON_MASK = (1 << _OFF_BUTTON_BIT) | (1 << _COOL_DOWN_BUTTON_BIT) | (1 << _COOL_BUTTON_BIT)
     _LED_MASK = (1 << _OFF_LED_BIT) | (1 << _COOL_DOWN_LED_BIT) | (1 << _COOL_LED_BIT)
 
-    def handle_button_press(self) -> bool:
+    def handle_button_press(self, input_state: int | None = None) -> bool:
         """
         Handle a button press event.
 
-        Reads the button inputs from port A, updates LED outputs on port B
-        so only one mode LED is active at a time, and emits the corresponding
-        mode signal.
+        When called from an interrupt handler, ``input_state`` should be the
+        value captured by the MCP23017 INTCAP register at interrupt time so
+        that a quick button release does not cause the press to be missed.
 
+        :param input_state: Captured port A value, or ``None`` to read live
         :return: ``True`` if a button press was handled, ``False`` otherwise
         """
-        input_state = self.gpio.read("A")
+        if input_state is None:
+            input_state = self.gpio.read("A")
 
         if not (input_state & (1 << self._OFF_BUTTON_BIT)):
             self._set_active_led(self._OFF_LED_BIT)
@@ -542,6 +575,13 @@ class ButtonsGpio:
     def _on_interrupt(self) -> None:
         """
         Handle MCP23017 interrupt event from GPIO27.
+
+        Reads the INTCAP register (which also clears the interrupt) and
+        forwards the captured pin state to :meth:`handle_button_press` so
+        that a quick button release is not missed.
         """
-        self.gpio.clear_port_a_interrupt()
-        self.handle_button_press()
+        try:
+            captured_state = self.gpio.clear_port_a_interrupt()
+            self.handle_button_press(input_state=captured_state)
+        except OSError:
+            logger.warning("I2C error during interrupt handling, skipping")

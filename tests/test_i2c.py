@@ -2,7 +2,7 @@ import pytest
 import logging
 from unittest.mock import MagicMock
 import fridge.i2c as i2c_module
-from fridge.i2c import i2c_scan, I2cGpio, RelayGpio, ButtonsGpio
+from fridge.i2c import i2c_scan, I2cGpio, RelayGpio, ButtonsGpio, Sht30
 from fridge.enums import ModeState
 from fridge.signals import mode_idle, mode_cooling_down, mode_cool
 
@@ -90,7 +90,7 @@ def test_buttons_gpio_start_interrupt_listener_handles_button_interrupt(mocker, 
     fake_button = FakeButton(pin=27, pull_up=True)
     button_cls = mocker.Mock(return_value=fake_button)
     mocker.patch.object(i2c_module, "GpioZeroButton", button_cls)
-    mock_gpio.clear_port_a_interrupt = mocker.Mock()
+    mock_gpio.clear_port_a_interrupt = mocker.Mock(return_value=0xEF)
     buttons = ButtonsGpio(mock_gpio)
     handle_mock = mocker.patch.object(buttons, "handle_button_press", return_value=True)
 
@@ -102,7 +102,7 @@ def test_buttons_gpio_start_interrupt_listener_handles_button_interrupt(mocker, 
     fake_button.when_pressed()
 
     mock_gpio.clear_port_a_interrupt.assert_called_once_with()
-    handle_mock.assert_called_once_with()
+    handle_mock.assert_called_once_with(input_state=0xEF)
 
 
 def test_relay_gpio_set_cooler_off(mock_gpio):
@@ -301,6 +301,102 @@ def test_buttons_gpio_set_mode_raises_for_unsupported_mode(mock_gpio):
 
     with pytest.raises(ValueError, match="Unsupported mode"):
         buttons.set_mode(99)
+
+
+def test_on_interrupt_uses_captured_state_for_button_handling(mocker, mock_gpio):
+    """
+    _on_interrupt should use the INTCAP captured state to handle button press,
+    not re-read the GPIO which may have changed (button released).
+    """
+    # clear_port_a_interrupt returns the captured state with off button pressed
+    mock_gpio.clear_port_a_interrupt = mocker.Mock(return_value=0xEF)
+    buttons = ButtonsGpio(mock_gpio)
+
+    receiver = mocker.Mock()
+    mode_idle.connect(receiver)
+
+    try:
+        buttons._on_interrupt()
+    finally:
+        mode_idle.disconnect(receiver)
+
+    mock_gpio.clear_port_a_interrupt.assert_called_once()
+    receiver.assert_called_once()
+
+
+def test_on_interrupt_ignores_release_event(mocker, mock_gpio):
+    """
+    When interrupt fires on button release (all buttons high), no signal
+    should be emitted.
+    """
+    # All buttons released - all bits high
+    mock_gpio.clear_port_a_interrupt = mocker.Mock(return_value=0xFF)
+    buttons = ButtonsGpio(mock_gpio)
+
+    idle_receiver = mocker.Mock()
+    cool_receiver = mocker.Mock()
+    mode_idle.connect(idle_receiver)
+    mode_cool.connect(cool_receiver)
+
+    try:
+        buttons._on_interrupt()
+    finally:
+        mode_idle.disconnect(idle_receiver)
+        mode_cool.disconnect(cool_receiver)
+
+    idle_receiver.assert_not_called()
+    cool_receiver.assert_not_called()
+
+
+def test_on_interrupt_handles_oserror_gracefully(mocker, mock_gpio):
+    """
+    _on_interrupt should not crash when I2C communication fails.
+    """
+    mock_gpio.clear_port_a_interrupt = mocker.Mock(side_effect=OSError("I/O error"))
+    buttons = ButtonsGpio(mock_gpio)
+
+    # Should not raise
+    buttons._on_interrupt()
+
+
+def test_sht30_read_data_retries_on_oserror(mocker):
+    """
+    read_data should retry on transient OSError and succeed if a later
+    attempt works.
+    """
+    mocker.patch("fridge.i2c.time")  # skip real sleep
+    sht30 = Sht30.__new__(Sht30)
+    sht30.addr = 0x44
+
+    call_count = 0
+
+    def fake_fetch():
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise OSError("I/O error")
+        return 22.0, 55.0
+
+    mocker.patch.object(sht30, "_fetch_sample", side_effect=fake_fetch)
+
+    temp, hum = sht30.read_data()
+    assert temp == 22.0
+    assert hum == 55.0
+    assert call_count == 3
+
+
+def test_sht30_read_data_raises_after_all_retries_fail(mocker):
+    """
+    read_data should re-raise OSError after exhausting all retries.
+    """
+    mocker.patch("fridge.i2c.time")  # skip real sleep
+    sht30 = Sht30.__new__(Sht30)
+    sht30.addr = 0x44
+
+    mocker.patch.object(sht30, "_fetch_sample", side_effect=OSError("persistent error"))
+
+    with pytest.raises(OSError, match="persistent error"):
+        sht30.read_data()
 
 
 def test_sht30_crc(sht30):
