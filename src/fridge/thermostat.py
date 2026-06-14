@@ -21,6 +21,7 @@ DEFAULT_LOW_PRICE_COOL_ADJ = -2.0
 DEFAULT_LOW_PRICE_HEAT_ADJ = 1.0
 DEFAULT_HIGH_PRICE_COOL_ADJ = 2.0
 DEFAULT_HIGH_PRICE_HEAT_ADJ = -2.0
+DEFAULT_MIN_RELAY_INTERVAL = 300.0
 
 
 @dataclass
@@ -181,6 +182,10 @@ class Thermostat:
         self.stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self.refresh_rate = self.config.getfloat("General", "refresh_rate", fallback=1.0)
+        self._min_relay_interval = self.config.getfloat(
+            "General", "min_relay_interval", fallback=DEFAULT_MIN_RELAY_INTERVAL
+        )
+        self._last_relay_switch: dict[str, float] = {}
 
     def start(self) -> None:
         """
@@ -289,38 +294,80 @@ class Thermostat:
             heater=action_state is ActionState.HEATING,
         )
 
+    def _is_relay_rate_limited(self, relay_name: str) -> bool:
+        """
+        Check if a relay is currently rate-limited.
+
+        :param relay_name: Name of the relay ("cooler", "heater", "fan")
+        :return: True if the relay must not be switched yet
+        """
+        last_switch = self._last_relay_switch.get(relay_name)
+        if last_switch is None:
+            return False
+        return (time.monotonic() - last_switch) < self._min_relay_interval
+
+    def _record_relay_switch(self, relay_name: str) -> None:
+        """
+        Record the current time as the last switch time for a relay.
+
+        :param relay_name: Name of the relay ("cooler", "heater", "fan")
+        """
+        self._last_relay_switch[relay_name] = time.monotonic()
+
     def _set_relays(self, cooler: bool, heater: bool) -> None:
         """
-        Set relay states, avoiding redundant writes.
+        Set relay states, avoiding redundant writes and respecting rate limits.
+
+        Rate limiting is bypassed when turning relays off in IDLE mode.
+
         :param cooler: Cooler relay state
         :param heater: Heater relay state
-        :param fan: Ventilation fan relay state
         :return:
         """
+        bypass = self.mode == ModeState.IDLE
+
         if self.relay.read_cooler_relay() != cooler:
-            self.relay.set_cooler_relay(cooler)
+            if bypass or not self._is_relay_rate_limited("cooler"):
+                self.relay.set_cooler_relay(cooler)
+                self._record_relay_switch("cooler")
         if self.relay.read_heater_relay() != heater:
-            self.relay.set_heater_relay(heater)
+            if bypass or not self._is_relay_rate_limited("heater"):
+                self.relay.set_heater_relay(heater)
+                self._record_relay_switch("heater")
 
     def _set_fan_relay(self) -> None:
         """
         Set fan relay based on the current mode and humidity.
+
+        Rate limiting is bypassed in IDLE mode (safety override).
+
         :return:
         """
         match self.mode:
             case ModeState.IDLE:
-                self.relay.set_vent_fan_relay(False)
+                if self.relay.read_vent_fan_relay():
+                    self.relay.set_vent_fan_relay(False)
+                    self._record_relay_switch("fan")
 
             case ModeState.COOL:
                 if self.thresholds.fan_on_threshold is None:
                     return
                 if self._humidity > self.thresholds.fan_on_threshold:
-                    self.relay.set_vent_fan_relay(True)
+                    if not self.relay.read_vent_fan_relay():
+                        if not self._is_relay_rate_limited("fan"):
+                            self.relay.set_vent_fan_relay(True)
+                            self._record_relay_switch("fan")
                 elif self._humidity <= self.thresholds.fan_off_threshold:
-                    self.relay.set_vent_fan_relay(False)
+                    if self.relay.read_vent_fan_relay():
+                        if not self._is_relay_rate_limited("fan"):
+                            self.relay.set_vent_fan_relay(False)
+                            self._record_relay_switch("fan")
 
             case ModeState.COOL_DOWN:
-                self.relay.set_vent_fan_relay(True)
+                if not self.relay.read_vent_fan_relay():
+                    if not self._is_relay_rate_limited("fan"):
+                        self.relay.set_vent_fan_relay(True)
+                        self._record_relay_switch("fan")
 
     def _read_sensor(self) -> None:
         """

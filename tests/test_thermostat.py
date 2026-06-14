@@ -167,6 +167,7 @@ def thermostat_testbed(
 
     config = _load_default_config()
     config.set("General", "refresh_rate", "0.01")
+    config.set("General", "min_relay_interval", "0")
 
     thermostat = Thermostat(gpio=cast(object, None), config=config)
     return thermostat, relay, sensor, cache
@@ -230,3 +231,120 @@ def test_start_and_stop_are_idempotent(
     assert relay.cooler is False
     assert relay.heater is False
     assert relay.fan is False
+
+
+def _make_rate_limited_testbed(
+    monkeypatch: pytest.MonkeyPatch,
+    interval: float = 0.1,
+) -> tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache]:
+    """Create a thermostat testbed with a short relay interval for rate limiting tests."""
+    relay = _FakeRelay()
+    sensor = _FakeSensor([(20.0, 40.0)])
+    cache = _FakeCache()
+
+    monkeypatch.setattr("fridge.thermostat.Sht30", lambda: sensor)
+    monkeypatch.setattr("fridge.thermostat.RelayGpio", lambda _gpio: relay)
+    monkeypatch.setattr("fridge.thermostat.Cache", lambda _path: cache)
+
+    config = _load_default_config()
+    config.set("General", "refresh_rate", "0.01")
+    config.set("General", "min_relay_interval", str(interval))
+
+    thermostat = Thermostat(gpio=cast(object, None), config=config)
+    return thermostat, relay, sensor, cache
+
+
+def test_relay_rate_limit_blocks_rapid_switching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relay change is blocked when called again within the minimum interval."""
+    thermostat, relay, sensor, _cache = _make_rate_limited_testbed(monkeypatch, interval=10.0)
+    thermostat.set_mode(ModeState.COOL)
+
+    # First reading triggers cooling (temp above cooler_on_threshold)
+    # Second reading would trigger idle (temp below cooler_off_threshold)
+    # But the second change should be blocked by rate limiting
+    sensor._readings = [(10.0, 40.0), (3.0, 40.0), (3.0, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.05)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    cooler_calls = [call for call in relay.calls if call[0] == "cooler"]
+    # Only the first switch (cooler on) should happen; second is rate-limited
+    assert cooler_calls == [("cooler", True)]
+
+
+def test_relay_rate_limit_allows_change_after_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relay change is allowed once the minimum interval has elapsed."""
+    thermostat, relay, sensor, _cache = _make_rate_limited_testbed(monkeypatch, interval=0.05)
+    thermostat.set_mode(ModeState.COOL)
+
+    # Temp high → cooling on, then temp low → cooling off after interval
+    sensor._readings = [(10.0, 40.0), (3.0, 40.0), (3.0, 40.0), (3.0, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    # Wait long enough for the interval to pass and second change to happen
+    time.sleep(0.15)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    cooler_calls = [call for call in relay.calls if call[0] == "cooler"]
+    assert cooler_calls == [("cooler", True), ("cooler", False)]
+
+
+def test_relay_rate_limit_idle_mode_always_forces_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Switching to IDLE mode always forces relays off, bypassing rate limit."""
+    thermostat, relay, sensor, _cache = _make_rate_limited_testbed(monkeypatch, interval=10.0)
+    thermostat.set_mode(ModeState.COOL)
+
+    # First reading triggers cooling
+    sensor._readings = [(10.0, 40.0), (10.0, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.03)
+
+    # Switch to IDLE — should force relays off despite rate limit
+    thermostat.set_mode(ModeState.IDLE)
+    time.sleep(0.03)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert relay.cooler is False
+    assert relay.heater is False
+    assert relay.fan is False
+
+
+def test_relay_rate_limit_independent_per_relay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each relay is rate-limited independently."""
+    thermostat, relay, sensor, _cache = _make_rate_limited_testbed(monkeypatch, interval=10.0)
+    thermostat.set_mode(ModeState.COOL)
+
+    # Temp high → cooling on, then temp very low → should want heating
+    # Cooler→on is allowed (first change), heater→on should also be allowed
+    # (independent relay, first change for heater)
+    sensor._readings = [(10.0, 40.0), (0.0, 40.0), (0.0, 40.0)]
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.05)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    cooler_calls = [call for call in relay.calls if call[0] == "cooler"]
+    heater_calls = [call for call in relay.calls if call[0] == "heater"]
+
+    # Cooler was turned on first, then rate-limited from turning off
+    assert ("cooler", True) in cooler_calls
+    # Heater should be turned on (independent, first change for heater)
+    assert ("heater", True) in heater_calls
