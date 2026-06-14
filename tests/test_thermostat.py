@@ -37,10 +37,10 @@ def test_generate_thresholds_cool_down_normal_price() -> None:
 
     assert thresholds.target_temperature == 12.0
     assert thresholds.target_humidity is None
-    assert thresholds.heater_on_threshold == 11.0
-    assert thresholds.heater_off_threshold == 13.0
-    assert thresholds.cooler_on_threshold == 13.0
-    assert thresholds.cooler_off_threshold == 11.0
+    assert thresholds.heater_on_threshold == 10.5
+    assert thresholds.heater_off_threshold == 13.5
+    assert thresholds.cooler_on_threshold == 13.5
+    assert thresholds.cooler_off_threshold == 10.5
     assert thresholds.fan_on_threshold == 1.0
     assert thresholds.fan_off_threshold == 0.0
 
@@ -51,10 +51,10 @@ def test_generate_thresholds_cool_down_low_price_adjusts_targets() -> None:
     thresholds = generate_thresholds(config, ModeState.COOL_DOWN, EnergyState.LOW_PRICE)
 
     assert thresholds.target_temperature == 12.0
-    assert thresholds.heater_on_threshold == 12.0
-    assert thresholds.heater_off_threshold == 14.0
-    assert thresholds.cooler_on_threshold == 11.0
-    assert thresholds.cooler_off_threshold == 9.0
+    assert thresholds.heater_on_threshold == 11.5
+    assert thresholds.heater_off_threshold == 14.5
+    assert thresholds.cooler_on_threshold == 11.5
+    assert thresholds.cooler_off_threshold == 8.5
 
 
 def test_generate_thresholds_cool_mode_high_price_uses_freeze_guard() -> None:
@@ -63,13 +63,13 @@ def test_generate_thresholds_cool_mode_high_price_uses_freeze_guard() -> None:
     thresholds = generate_thresholds(config, ModeState.COOL, EnergyState.HIGH_PRICE)
 
     assert thresholds.target_temperature == 5.0
-    assert thresholds.target_humidity == 50.0
-    assert thresholds.heater_on_threshold == 2.0
-    assert thresholds.heater_off_threshold == 4.0
-    assert thresholds.cooler_on_threshold == 8.0
-    assert thresholds.cooler_off_threshold == 6.0
-    assert thresholds.fan_on_threshold == 55.0
-    assert thresholds.fan_off_threshold == 45.0
+    assert thresholds.target_humidity == 55.0
+    assert thresholds.heater_on_threshold == 1.5
+    assert thresholds.heater_off_threshold == 4.5
+    assert thresholds.cooler_on_threshold == 8.5
+    assert thresholds.cooler_off_threshold == 5.5
+    assert thresholds.fan_on_threshold == 60.0
+    assert thresholds.fan_off_threshold == 50.0
 
 
 def test_generate_thresholds_uses_readme_defaults_as_fallbacks_for_cool_down() -> None:
@@ -79,10 +79,10 @@ def test_generate_thresholds_uses_readme_defaults_as_fallbacks_for_cool_down() -
 
     assert thresholds.target_temperature == 12.0
     assert thresholds.target_humidity is None
-    assert thresholds.heater_on_threshold == 11.0
-    assert thresholds.heater_off_threshold == 13.0
-    assert thresholds.cooler_on_threshold == 13.0
-    assert thresholds.cooler_off_threshold == 11.0
+    assert thresholds.heater_on_threshold == 10.5
+    assert thresholds.heater_off_threshold == 13.5
+    assert thresholds.cooler_on_threshold == 13.5
+    assert thresholds.cooler_off_threshold == 10.5
     assert thresholds.fan_on_threshold == 1.0
     assert thresholds.fan_off_threshold == 0.0
 
@@ -93,13 +93,13 @@ def test_generate_thresholds_uses_readme_defaults_as_fallbacks_for_cool_mode_hig
     thresholds = generate_thresholds(config, ModeState.COOL, EnergyState.HIGH_PRICE)
 
     assert thresholds.target_temperature == 5.0
-    assert thresholds.target_humidity == 50.0
-    assert thresholds.heater_on_threshold == 2.0
-    assert thresholds.heater_off_threshold == 4.0
-    assert thresholds.cooler_on_threshold == 8.0
-    assert thresholds.cooler_off_threshold == 6.0
-    assert thresholds.fan_on_threshold == 55.0
-    assert thresholds.fan_off_threshold == 45.0
+    assert thresholds.target_humidity == 55.0
+    assert thresholds.heater_on_threshold == 1.5
+    assert thresholds.heater_off_threshold == 4.5
+    assert thresholds.cooler_on_threshold == 8.5
+    assert thresholds.cooler_off_threshold == 5.5
+    assert thresholds.fan_on_threshold == 60.0
+    assert thresholds.fan_off_threshold == 50.0
 
 
 class _FakeSensor:
@@ -200,7 +200,7 @@ def test_thermostat_loop_changes_relays_only_when_action_state_changes(
 ) -> None:
     thermostat, relay, sensor, _cache = thermostat_testbed
     thermostat.set_mode(ModeState.COOL)
-    sensor._readings = [(10.0, 40.0), (10.0, 40.0), (4.0, 40.0), (4.0, 40.0)]
+    sensor._readings = [(10.0, 40.0), (10.0, 40.0), (3.0, 40.0), (3.0, 40.0)]
 
     thread = threading.Thread(target=thermostat._loop)
     thread.start()

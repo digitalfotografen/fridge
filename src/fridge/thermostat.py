@@ -11,11 +11,11 @@ from fridge import Sht30, RelayGpio, I2cGpio
 
 
 DEFAULT_COOL_DOWN_TARGET_TEMPERATURE = 12.0
-DEFAULT_COOL_DOWN_HYSTERESIS = 1.0
+DEFAULT_COOL_DOWN_HYSTERESIS = 1.5
 DEFAULT_COOL_TARGET_TEMPERATURE = 5.0
-DEFAULT_COOL_HYSTERESIS = 1.0
+DEFAULT_COOL_HYSTERESIS = 1.5
 DEFAULT_FREEZE_GUARD = 0.0
-DEFAULT_TARGET_HUMIDITY = 50.0
+DEFAULT_TARGET_HUMIDITY = 55.0
 DEFAULT_HUMIDITY_HYSTERESIS = 5.0
 DEFAULT_LOW_PRICE_COOL_ADJ = -2.0
 DEFAULT_LOW_PRICE_HEAT_ADJ = 1.0
@@ -200,8 +200,9 @@ class Thermostat:
         if self._thread is not None:
             self._thread.join(timeout=1)
 
-        self._set_relays(cooler=False, heater=False, fan=False)
         self._set_action_state(ActionState.IDLE)
+        self._set_relays(cooler=False, heater=False)
+        self.relay.set_vent_fan_relay(False)
 
     @property
     def action_state(self) -> ActionState:
@@ -277,15 +278,18 @@ class Thermostat:
     def _set_action_state(self, action_state: ActionState) -> None:
         """
         Update the action state and persist it when changed.
+        Set relays based on the new action state.
         :param action_state: New action state
         :return:
         """
-        if action_state == self._action_state:
-            return
         self._action_state = action_state
         self.cache.set("action_state", action_state)
+        self._set_relays(
+            cooler=action_state is ActionState.COOLING,
+            heater=action_state is ActionState.HEATING,
+        )
 
-    def _set_relays(self, cooler: bool, heater: bool, fan: bool) -> None:
+    def _set_relays(self, cooler: bool, heater: bool) -> None:
         """
         Set relay states, avoiding redundant writes.
         :param cooler: Cooler relay state
@@ -297,8 +301,26 @@ class Thermostat:
             self.relay.set_cooler_relay(cooler)
         if self.relay.read_heater_relay() != heater:
             self.relay.set_heater_relay(heater)
-        if self.relay.read_vent_fan_relay() != fan:
-            self.relay.set_vent_fan_relay(fan)
+
+    def _set_fan_relay(self) -> None:
+        """
+        Set fan relay based on the current mode and humidity.
+        :return:
+        """
+        match self.mode:
+            case ModeState.IDLE:
+                self.relay.set_vent_fan_relay(False)
+
+            case ModeState.COOL:
+                if self.thresholds.fan_on_threshold is None:
+                    return
+                if self._humidity > self.thresholds.fan_on_threshold:
+                    self.relay.set_vent_fan_relay(True)
+                elif self._humidity <= self.thresholds.fan_off_threshold:
+                    self.relay.set_vent_fan_relay(False)
+
+            case ModeState.COOL_DOWN:
+                self.relay.set_vent_fan_relay(True)
 
     def _read_sensor(self) -> None:
         """
@@ -320,58 +342,37 @@ class Thermostat:
         """
         while not self.stop_event.is_set():
             self._read_sensor()
+            self._set_fan_relay()  # this has internal mode handling
 
-            if self.mode == ModeState.IDLE:
-                self._set_action_state(ActionState.IDLE)
-                self._set_relays(cooler=False, heater=False, fan=False)
-                time.sleep(self.refresh_rate)
-                continue
+            match self.mode:
+                case ModeState.IDLE:
+                    self._set_action_state(ActionState.IDLE)
 
-            next_action = self._action_state
-            if (
-                self.thresholds.cooler_on_threshold is not None
-                and self._temperature >= self.thresholds.cooler_on_threshold
-            ):
-                next_action = ActionState.COOLING
-            elif (
-                self.thresholds.heater_on_threshold is not None
-                and self._temperature <= self.thresholds.heater_on_threshold
-            ):
-                next_action = ActionState.HEATING
-            elif (
-                self._action_state == ActionState.COOLING
-                and self.thresholds.cooler_off_threshold is not None
-                and self._temperature <= self.thresholds.cooler_off_threshold
-            ):
-                next_action = ActionState.IDLE
-            elif (
-                self._action_state == ActionState.HEATING
-                and self.thresholds.heater_off_threshold is not None
-                and self._temperature >= self.thresholds.heater_off_threshold
-            ):
-                next_action = ActionState.IDLE
+                case ModeState.COOL_DOWN | ModeState.COOL:
+                    next_action = self._action_state
 
-            if next_action != self._action_state:
-                self._set_action_state(next_action)
-                self._set_relays(
-                    cooler=next_action == ActionState.COOLING,
-                    heater=next_action == ActionState.HEATING,
-                    fan=self.mode == ModeState.COOL_DOWN,
-                )
-
-            if self.mode == ModeState.COOL:
-                fan_state = self.relay.read_vent_fan_relay()
-                if (
-                    self.thresholds.fan_on_threshold is not None
-                    and self._humidity >= self.thresholds.fan_on_threshold
-                    and not fan_state
-                ):
-                    self.relay.set_vent_fan_relay(True)
-                elif (
-                    self.thresholds.fan_off_threshold is not None
-                    and self._humidity <= self.thresholds.fan_off_threshold
-                    and fan_state
-                ):
-                    self.relay.set_vent_fan_relay(False)
+                    if (
+                        self.thresholds.cooler_on_threshold is not None
+                        and self._temperature >= self.thresholds.cooler_on_threshold
+                    ):
+                        next_action = ActionState.COOLING
+                    elif (
+                        self.thresholds.heater_on_threshold is not None
+                        and self._temperature <= self.thresholds.heater_on_threshold
+                    ):
+                        next_action = ActionState.HEATING
+                    elif (
+                        self._action_state == ActionState.COOLING
+                        and self.thresholds.cooler_off_threshold is not None
+                        and self._temperature <= self.thresholds.cooler_off_threshold
+                    ):
+                        next_action = ActionState.IDLE
+                    elif (
+                        self._action_state == ActionState.HEATING
+                        and self.thresholds.heater_off_threshold is not None
+                        and self._temperature >= self.thresholds.heater_off_threshold
+                    ):
+                        next_action = ActionState.IDLE
+                    self._set_action_state(next_action)
 
             time.sleep(self.refresh_rate)

@@ -11,16 +11,18 @@ This is a work in progress and not all features are implemented yet.
 
 # Typical usage
 The system is Idle mode when the fridge is not in use.
+The user can push the cool down button to start the cooling down process
+or the cool button to start the cooling process.
+The user can push the off button to switch the system to Idle mode.
 The exact settings are defined in a config file, the values below are the default values.
 The application remembers the state of the system,
 and is used to restore the state when the application is restarted after a power loss.
 
 ## Modes
-The application has three modes: Idle (default), Cooling Down and Cool.
-The Idle mode is used when the fridge is not in use.
+The application has three modes: Idle (default), Cooling Down and Cool that are described below.
 There are three buttons that can be used to switch between these modes.
 
-There is a hysteresis of ±1°C on the cooler and heater, to prevent it from switching on and off too often.
+There is a hysteresis of ±1.5°C on the cooler and heater, to prevent it from switching on and off too often.
 
 ### Idle mode
 The fridge is in Idle mode when the off button is pressed.
@@ -41,7 +43,7 @@ This mode is used to let the meat tender before cutting it, or to keep a massive
 The temperature is controlled to be between 2 and 8 degrees Celsius, with a target of 5 degrees Celsius.
 The cooler is used to regulate the temperature when it is too hot.
 The heater is used to as a freeze guard to prevent the temperature to drop below 0°C.
-The fan should be active if humidity is above 50%, and switched off if humidity is below 50% (with a hysteresis of 5%)
+The fan should be active if humidity is above 55%, and switched off if below ths (with a hysteresis of ±5%)
 
 ## Energy cost saving
 The system can be configured to avoid running the heater and cooler during high-price hours.
@@ -66,6 +68,7 @@ The INTA pin is connected to GPIO 27 and is used to generate interrupts when a u
 Bit 4: Off button
 Bit 5: Cool down button
 Bit 6: Cool button
+Bit 7: Reserved
 
 Port B is used for outputs (LEDs and relays). All outputs pins are connected to a ULN2803A driver.
 Both relays and LED:s are active low (open collector) and are grounded when the GPIO pin goes high.
@@ -75,6 +78,7 @@ Bit 2: Vent fan relay
 Bit 4: Off LED
 Bit 5: Cool down LED
 Bit 6: Cool LED
+Bit 7: Reserved
 
 The button handler uses radio-button behavior for mode LEDs: when a mode button is pressed,
 its corresponding LED is set and the other mode LEDs are cleared while relay bits remain unchanged.
@@ -82,8 +86,9 @@ The same LED behavior can also be applied programmatically via `ButtonsGpio.set_
 when mode changes are triggered by other parts of the application.
 Button events are handled via MCP23017 port A interrupts routed through INTA on Raspberry Pi GPIO 27 for fast response.
 
-The devices that the relays control are slow and should not be switched too often to avoid damage to the relays or the device.
-The maximum switching frequency is one event per minute.
+The devices that the relays control are slow and should not be switched too often
+to avoid damage to the relays or the device.
+The maximum switching frequency is one event per five-minute period.
 
 # Software implementation
 The software is written in Python. It is a CLI application implemented using the Click library.
