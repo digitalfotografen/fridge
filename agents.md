@@ -6,9 +6,10 @@ The fridge is controlled by a Raspberry Pi 4 with a custom interface board.
 The interface board has a SHT30 sensor and a MCP23017 GPIO.
 
 The Raspberry Pi is accessed via SSH, this is configured in the Pycharm project.
-The SSH user and password will be given in the prompts.
+The SSH user and password will be given in the prompts, ask the human developer for this if forgotten.
 The remote project folder is at /home/[user]/fridge
 Configuration, data, and logs are stored in /home/[user]/fridge_data.
+Don't overwrite the complete target of the project, or the -venv folder. Only send the files that are changed.
 
 The application must be able to run without network access or user interaction.
 

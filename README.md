@@ -112,6 +112,7 @@ CLI commands are used to control the application.
 - **show**: Display the current relay, LED and button states by reading the GPIO (read-only, safe while daemon is running).
 - **run**: Run the fridge controller daemon. Starts temperature regulation, button interrupt listener, and blocks until SIGINT/SIGTERM.
 - **scan**: Scan the I2C bus for connected devices.
+- **test**: Run a hardware test sequence to verify all components during installation.
 - **-h / --help**: Display help message.
 
 Configuration files, logs and databases are stored in a folder outside the application with the path ~/fridge_data.
@@ -315,6 +316,26 @@ sudo systemctl daemon-reload
 sudo systemctl enable fridge.service
 sudo systemctl start fridge.service
 ```
+
+### `test` — Hardware test sequence
+Runs a predefined sequence of hardware checks to verify that all components
+(sensor, LEDs, relays) are functioning correctly during installation.
+This command overrides the one-event-per-five-minutes relay rate limit.
+
+```bash
+uv run fridge test
+```
+
+The test sequence performs the following steps:
+1. Read and display temperature and humidity from the SHT30 sensor.
+2. Running light over all three LEDs (1 second per LED, 5 seconds total). Only LEDs are activated, not relays.
+3. Switch on the vent fan relay and Idle LED. Hold for 60 seconds.
+4. Switch off fan and Idle LED. Switch on heater relay and Cool Down LED. Hold for 60 seconds.
+5. Switch off heater and Cool Down LED. Switch on cooler relay and Cool LED. Hold for 60 seconds.
+6. Switch everything off and exit.
+
+Each step is logged via `logger.info`. If an error occurs, all relays and LEDs
+are turned off before the command exits.
 
 ### `scan` — Scan the I2C bus
 Scans the I2C bus and lists all detected device addresses. Useful for verifying

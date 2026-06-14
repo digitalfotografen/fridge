@@ -205,6 +205,34 @@ def scan():
         click.echo(f"  0x{addr:02x}")
 
 
+@cli.command("test")
+def test_hardware():
+    """Run hardware test sequence for installation verification."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+        handlers=[logging.StreamHandler()],
+    )
+
+    try:
+        gpio = I2cGpio()
+    except Exception as exc:
+        click.echo(f"Error initialising GPIO: {exc}", err=True)
+        raise SystemExit(1) from exc
+
+    try:
+        sensor = Sht30()
+    except Exception as exc:
+        click.echo(f"Error initialising sensor: {exc}", err=True)
+        raise SystemExit(1) from exc
+
+    from fridge.hardware_test import run_hardware_test
+
+    run_hardware_test(gpio, sensor)
+
+
 @cli.command()
 def run():
     """Run the fridge controller daemon."""
