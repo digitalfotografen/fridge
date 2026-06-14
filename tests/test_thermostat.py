@@ -1,4 +1,5 @@
 from configparser import ConfigParser
+import logging
 import threading
 import time
 from typing import cast
@@ -510,6 +511,64 @@ def test_thermostat_defaults_action_state_to_idle_when_not_cached(
     """Thermostat should default to IDLE when action_state is not in cache."""
     thermostat, _relay, _sensor, _cache = thermostat_testbed
     assert thermostat.action_state == ActionState.IDLE
+
+
+# ---------------------------------------------------------------------------
+# Logging tests
+# ---------------------------------------------------------------------------
+
+
+def test_set_mode_logs_info_with_state_names_and_sensor_values(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """set_mode should log an info message with the new mode name, temperature and humidity."""
+    thermostat, _relay, sensor, _cache = thermostat_testbed
+    thermostat._temperature = 7.36
+    thermostat._humidity = 62.84
+
+    with caplog.at_level(logging.INFO, logger="fridge.thermostat"):
+        thermostat.set_mode(ModeState.COOL)
+
+    assert any(
+        "COOL" in r.message and "7.4" in r.message and "62.8" in r.message for r in caplog.records
+    )
+
+
+def test_set_energy_state_logs_info_with_state_names_and_sensor_values(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """set_energy_state should log an info message with the new energy state name, temp and humidity."""
+    thermostat, _relay, sensor, _cache = thermostat_testbed
+    thermostat._temperature = 5.06
+    thermostat._humidity = 50.16
+
+    with caplog.at_level(logging.INFO, logger="fridge.thermostat"):
+        thermostat.set_energy_state(EnergyState.LOW_PRICE)
+
+    assert any(
+        "LOW_PRICE" in r.message and "5.1" in r.message and "50.2" in r.message
+        for r in caplog.records
+    )
+
+
+def test_set_action_state_logs_info_with_state_names_and_sensor_values(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """_set_action_state should log an info message with the new action state name, temp and humidity."""
+    thermostat, _relay, sensor, _cache = thermostat_testbed
+    thermostat._temperature = 13.55
+    thermostat._humidity = 44.44
+
+    with caplog.at_level(logging.INFO, logger="fridge.thermostat"):
+        thermostat._set_action_state(ActionState.COOLING)
+
+    assert any(
+        "COOLING" in r.message and "13.6" in r.message and "44.4" in r.message
+        for r in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------

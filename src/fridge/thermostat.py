@@ -278,6 +278,12 @@ class Thermostat:
         self.thresholds = generate_thresholds(
             config=self.config, mode=self.mode, energy_state=self.energy_state
         )
+        logger.info(
+            "Mode changed to %s (temperature=%.1f°C, humidity=%.1f%%)",
+            mode.name,
+            self._temperature,
+            self._humidity,
+        )
 
     def get_mode(self) -> ModeState:
         """
@@ -298,6 +304,12 @@ class Thermostat:
         self.cache.set("energy_state", energy_state)
         self.thresholds = generate_thresholds(
             config=self.config, mode=self.mode, energy_state=self.energy_state
+        )
+        logger.info(
+            "Energy state changed to %s (temperature=%.1f°C, humidity=%.1f%%)",
+            energy_state.name,
+            self._temperature,
+            self._humidity,
         )
 
     def get_energy_state(self) -> EnergyState:
@@ -322,6 +334,13 @@ class Thermostat:
         :return:
         """
         self._ensure_cache_open()
+        if action_state != self._action_state:
+            logger.info(
+                "Action state changed to %s (temperature=%.1f°C, humidity=%.1f%%)",
+                action_state.name,
+                self._temperature,
+                self._humidity,
+            )
         self._action_state = action_state
         self.cache.set("action_state", action_state)
         self._set_relays(
