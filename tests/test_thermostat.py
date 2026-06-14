@@ -2,6 +2,7 @@ from configparser import ConfigParser
 import threading
 import time
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 
@@ -146,11 +147,15 @@ class _FakeCache:
     def __init__(self) -> None:
         self.values: dict[str, object] = {}
 
-    def get(self, key: str, default: object) -> object:
+    def get(self, key: str, default: object = None) -> object:
         return self.values.get(key, default)
 
     def set(self, key: str, value: object) -> None:
         self.values[key] = value
+
+    def delete(self, key: str) -> bool:
+        """Remove a key from the cache, return True if it existed."""
+        return self.values.pop(key, None) is not None
 
 
 @pytest.fixture
@@ -348,3 +353,112 @@ def test_relay_rate_limit_independent_per_relay(
     assert ("cooler", True) in cooler_calls
     # Heater should be turned on (independent, first change for heater)
     assert ("heater", True) in heater_calls
+
+
+# ---------------------------------------------------------------------------
+# COOL_DOWN → COOL auto-switch tests
+# ---------------------------------------------------------------------------
+
+
+def test_set_mode_cool_down_stores_timestamp(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """Switching to COOL_DOWN stores a timestamp in the cache."""
+    thermostat, _relay, _sensor, cache = thermostat_testbed
+
+    with patch("fridge.thermostat.time") as mock_time:
+        mock_time.monotonic.return_value = 100.0
+        mock_time.time.return_value = 1000.0
+        mock_time.sleep = time.sleep
+        thermostat.set_mode(ModeState.COOL_DOWN)
+
+    assert cache.values.get("cool_down_start") == 1000.0
+
+
+def test_set_mode_idle_clears_cool_down_timestamp(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """Switching to IDLE clears the cool_down_start timestamp."""
+    thermostat, _relay, _sensor, cache = thermostat_testbed
+    cache.values["cool_down_start"] = 1000.0
+
+    thermostat.set_mode(ModeState.IDLE)
+
+    assert cache.values.get("cool_down_start") is None
+
+
+def test_set_mode_cool_clears_cool_down_timestamp(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """Switching to COOL clears the cool_down_start timestamp."""
+    thermostat, _relay, _sensor, cache = thermostat_testbed
+    cache.values["cool_down_start"] = 1000.0
+
+    thermostat.set_mode(ModeState.COOL)
+
+    assert cache.values.get("cool_down_start") is None
+
+
+def test_auto_switch_cool_down_to_cool_after_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thermostat auto-switches from COOL_DOWN to COOL after configured hours."""
+    relay = _FakeRelay()
+    sensor = _FakeSensor([(12.0, 40.0)])
+    cache = _FakeCache()
+
+    monkeypatch.setattr("fridge.thermostat.Sht30", lambda: sensor)
+    monkeypatch.setattr("fridge.thermostat.RelayGpio", lambda _gpio: relay)
+    monkeypatch.setattr("fridge.thermostat.Cache", lambda _path: cache)
+
+    config = _load_default_config()
+    config.set("General", "refresh_rate", "0.01")
+    config.set("General", "min_relay_interval", "0")
+    config.set("CoolDownMode", "auto_switch_hours", "10")
+
+    thermostat = Thermostat(gpio=cast(object, None), config=config)
+
+    # Simulate setting COOL_DOWN 11 hours ago
+    now = time.time()
+    cache.values["cool_down_start"] = now - (11 * 3600)
+    thermostat.set_mode(ModeState.COOL_DOWN)
+    # Restore the old timestamp (set_mode would overwrite since cache had no value initially)
+    cache.values["cool_down_start"] = now - (11 * 3600)
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.05)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.mode == ModeState.COOL
+
+
+def test_auto_switch_does_not_trigger_before_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thermostat stays in COOL_DOWN before the configured timeout."""
+    relay = _FakeRelay()
+    sensor = _FakeSensor([(12.0, 40.0)])
+    cache = _FakeCache()
+
+    monkeypatch.setattr("fridge.thermostat.Sht30", lambda: sensor)
+    monkeypatch.setattr("fridge.thermostat.RelayGpio", lambda _gpio: relay)
+    monkeypatch.setattr("fridge.thermostat.Cache", lambda _path: cache)
+
+    config = _load_default_config()
+    config.set("General", "refresh_rate", "0.01")
+    config.set("General", "min_relay_interval", "0")
+    # Very long auto-switch time
+    config.set("CoolDownMode", "auto_switch_hours", "100")
+
+    thermostat = Thermostat(gpio=cast(object, None), config=config)
+    thermostat.set_mode(ModeState.COOL_DOWN)
+
+    thread = threading.Thread(target=thermostat._loop)
+    thread.start()
+    time.sleep(0.05)
+    thermostat.stop_event.set()
+    thread.join(timeout=1)
+
+    assert thermostat.mode == ModeState.COOL_DOWN

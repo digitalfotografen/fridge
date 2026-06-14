@@ -2,6 +2,7 @@ from configparser import ConfigParser
 from diskcache import Cache
 from dataclasses import dataclass
 import math
+import os
 import threading
 import time
 
@@ -22,6 +23,7 @@ DEFAULT_LOW_PRICE_HEAT_ADJ = 1.0
 DEFAULT_HIGH_PRICE_COOL_ADJ = 2.0
 DEFAULT_HIGH_PRICE_HEAT_ADJ = -2.0
 DEFAULT_MIN_RELAY_INTERVAL = 300.0
+DEFAULT_AUTO_SWITCH_HOURS = 10.0
 
 
 @dataclass
@@ -170,7 +172,7 @@ class Thermostat:
         self.config = config
         self.sensor = Sht30()
         self.relay = RelayGpio(gpio)
-        self.cache = Cache(cache_path)
+        self.cache = Cache(os.path.expanduser(cache_path))
         self.mode = self.cache.get("mode", ModeState.IDLE)
         self.energy_state = self.cache.get("energy_state", EnergyState.NORMAL_PRICE)
         self.thresholds = generate_thresholds(
@@ -237,11 +239,19 @@ class Thermostat:
         """
         Set the thermostat mode.
         Updates the thresholds based on the new mode.
+        Manages the cool_down_start timestamp for auto-switch.
         :param mode: New mode
         :return:
         """
         self.mode = mode
         self.cache.set("mode", mode)
+
+        if mode == ModeState.COOL_DOWN:
+            if self.cache.get("cool_down_start") is None:
+                self.cache.set("cool_down_start", time.time())
+        else:
+            self.cache.delete("cool_down_start")
+
         self.thresholds = generate_thresholds(
             config=self.config, mode=self.mode, energy_state=self.energy_state
         )
@@ -369,6 +379,27 @@ class Thermostat:
                         self.relay.set_vent_fan_relay(True)
                         self._record_relay_switch("fan")
 
+    def _check_cool_down_auto_switch(self) -> None:
+        """
+        Check if COOL_DOWN mode has been active long enough to auto-switch to COOL.
+
+        Uses a wall-clock timestamp stored in diskcache so the timer survives
+        power-loss restarts.
+        """
+        if self.mode != ModeState.COOL_DOWN:
+            return
+
+        cool_down_start = self.cache.get("cool_down_start")
+        if cool_down_start is None:
+            return
+
+        auto_switch_hours = self.config.getfloat(
+            "CoolDownMode", "auto_switch_hours", fallback=DEFAULT_AUTO_SWITCH_HOURS
+        )
+        elapsed_hours = (time.time() - cool_down_start) / 3600.0
+        if elapsed_hours >= auto_switch_hours:
+            self.set_mode(ModeState.COOL)
+
     def _read_sensor(self) -> None:
         """
         Read temperature and humidity from the sensor.
@@ -422,4 +453,5 @@ class Thermostat:
                         next_action = ActionState.IDLE
                     self._set_action_state(next_action)
 
+            self._check_cool_down_auto_switch()
             time.sleep(self.refresh_rate)

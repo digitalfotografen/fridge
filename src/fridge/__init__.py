@@ -19,4 +19,5 @@ from .signals import fan_started as fan_started
 from .signals import fan_stopped as fan_stopped
 from .signals import energy_state_changed as energy_state_changed
 
-cache_path = "/tmp/fridge"
+data_path = "~/fridge_data"
+cache_path = "~/fridge_data/cache"

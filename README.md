@@ -102,12 +102,12 @@ The application has the following components:
 Temperature and other settings are defined in an .ini config file read when the application starts.
 The default values as defined above in the Typical usage section.
 
-Cli options are used to control the application.
-- **--daemon**: Start the application as a daemon. This will start the temperature regulation thread and MQTT client.
-- **--export**: Export the database to a CSV file.
-- **--config**: Display the current configuration.
-- **--show**: Display the current state, temperature, humidity and mode.
-- **--help**: Display this help message.
+CLI commands are used to control the application.
+- **config**: Create the configuration file from defaults if missing, then display current settings.
+- **show**: Display the current relay, LED and button states by reading the GPIO (read-only, safe while daemon is running).
+- **run**: Run the fridge controller daemon. Starts temperature regulation, button interrupt listener, and blocks until SIGINT/SIGTERM.
+- **scan**: Scan the I2C bus for connected devices.
+- **-h / --help**: Display help message.
 
 Configuration files, logs and databases are stored in a folder outside the application with the path ~/fridge_data.
 This makes it possible to update the application without losing the configuration and database.
@@ -186,11 +186,171 @@ This is done using the paho-mqtt library.
 This is not used for temperature regulation.
 
 # Installation and usage
-This project uses `uv` for dependency management.
-```bash
-uv sync
-uv run fridge --help
 
-# Run only hardware-backed thermostat tests on Raspberry Pi
+## Prerequisites
+- Python 3.13 or later
+- [uv](https://docs.astral.sh/uv/) for dependency management and running the application
+- Raspberry Pi 4B with the custom interface board (for hardware operation)
+
+## Installation
+Clone the repository and install dependencies:
+```bash
+git clone <repository-url>
+cd fridge
+uv sync
+```
+
+## Configuration
+The application stores its configuration, data, logs and cache in `~/fridge_data/`.
+This directory is separate from the application code, so the application can be updated
+without losing configuration or state data.
+
+### Creating the configuration file
+Run the `config` command to create the configuration file from defaults:
+```bash
+uv run fridge config
+```
+This copies `config_default.ini` to `~/fridge_data/fridge.ini` if it does not already exist,
+then displays all current settings. Edit `~/fridge_data/fridge.ini` to customise values such as
+target temperatures, hysteresis, refresh rate, and energy price adjustments.
+
+### Configuration sections
+| Section        | Description                                               |
+|----------------|-----------------------------------------------------------|
+| `General`      | Refresh rate and minimum relay switching interval          |
+| `Hardware`     | I2C addresses for sensors and GPIO, interrupt GPIO pin     |
+| `CoolDownMode` | Target temperature, hysteresis and auto-switch duration    |
+| `CoolMode`     | Target temperature, hysteresis, freeze guard and humidity  |
+| `Energy`       | Temperature adjustments for low and high energy prices     |
+| `Logging`      | Log file path                                             |
+| `MQTT`         | MQTT broker settings (not yet implemented)                |
+
+## CLI commands
+The application is invoked with `uv run fridge` followed by a command.
+Use `-h` or `--help` on any command to see its options.
+
+```bash
+uv run fridge --help
+```
+
+### `config` — Configuration management
+Creates the configuration file from defaults if it does not exist, then displays all
+current settings in a human-readable format.
+```bash
+uv run fridge config
+```
+
+### `show` — Display current state (read-only)
+Reads the GPIO hardware and diskcache to display the current state of relays,
+LEDs, buttons and cached thermostat state. This command is read-only and safe to
+run while the daemon is already running.
+```bash
+uv run fridge show
+```
+Example output:
+```
+=== Relay States ===
+  Cooler : OFF
+  Heater : OFF
+  Fan    : OFF
+
+=== LED States ===
+  Off LED       : ON
+  Cool Down LED : OFF
+  Cool LED      : OFF
+
+=== Button States ===
+  Off       : released
+  Cool Down : released
+  Cool      : released
+
+=== Cached State ===
+  Mode         : IDLE
+  Action       : IDLE
+  Energy       : NORMAL_PRICE
+
+=== Sensor Readings ===
+  Temperature : 6.5 °C
+  Humidity    : 72.3 %
+```
+
+### `run` — Run the fridge controller
+Starts the fridge controller as a long-running process. The thermostat loop reads
+the temperature sensor, regulates relays according to the active mode, and listens
+for button presses via hardware interrupts.
+
+```bash
+uv run fridge run
+```
+
+The process runs until it receives `SIGINT` (Ctrl+C) or `SIGTERM`. On shutdown it
+turns off all relays and stops the thermostat loop gracefully.
+
+To run as a systemd service, create a unit file such as `/etc/systemd/system/fridge.service`:
+```ini
+[Unit]
+Description=Fridge Controller
+After=network.target
+
+[Service]
+Type=simple
+User=ulrik
+WorkingDirectory=/home/ulrik/fridge
+ExecStart=/home/ulrik/.local/bin/uv run fridge run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start the service:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable fridge.service
+sudo systemctl start fridge.service
+```
+
+### `scan` — Scan the I2C bus
+Scans the I2C bus and lists all detected device addresses. Useful for verifying
+that the SHT30 sensor and MCP23017 GPIO expander are connected correctly.
+```bash
+uv run fridge scan
+```
+
+## State persistence
+The application uses [diskcache](https://grantjenks.com/docs/diskcache/) to persist
+thermostat state (mode, action state, energy state and cool-down timer) in
+`~/fridge_data/cache/`. This ensures that the fridge resumes its previous operating
+mode after a power loss or restart.
+
+## Logging
+Events such as mode changes and relay switches are logged to a file (default
+`~/fridge.log`) and to the console. The log file path can be changed in the
+`[Logging]` section of the configuration file.
+
+## Development
+
+### Running tests
+```bash
+# Run all non-hardware tests
+uv run pytest tests/ --ignore=tests/test_thermostat_hw.py
+
+# Run hardware-backed tests on the Raspberry Pi
 uv run pytest tests/test_thermostat_hw.py
+
+# Run with coverage
+uv run pytest tests/ --ignore=tests/test_thermostat_hw.py --cov=fridge
+```
+
+### Linting and formatting
+```bash
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
+```
+
+### Building documentation
+```bash
+uv run sphinx-build docs/ docs/_build/
+```
 

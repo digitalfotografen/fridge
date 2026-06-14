@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-fridge = "fridge:cli"
+fridge = "fridge.cli:cli"
 
 [dependency-groups]
 test = [
