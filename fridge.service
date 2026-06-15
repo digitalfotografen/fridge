@@ -1,0 +1,14 @@
+[Unit]
+Description=Fridge Controller
+After=multi-user.target
+
+[Service]
+Type=simple
+User=ulrik
+WorkingDirectory=/home/ulrik/fridge
+ExecStart=/home/ulrik/.local/bin/uv run fridge run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
