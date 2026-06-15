@@ -498,17 +498,14 @@ class ButtonsGpio:
             input_state = self.gpio.read("A")
 
         if not (input_state & (1 << self._OFF_BUTTON_BIT)):
-            self._set_active_led(self._OFF_LED_BIT)
             mode_idle.send(self)
             return True
 
         if not (input_state & (1 << self._COOL_DOWN_BUTTON_BIT)):
-            self._set_active_led(self._COOL_DOWN_LED_BIT)
             mode_cooling_down.send(self)
             return True
 
         if not (input_state & (1 << self._COOL_BUTTON_BIT)):
-            self._set_active_led(self._COOL_LED_BIT)
             mode_cool.send(self)
             return True
 

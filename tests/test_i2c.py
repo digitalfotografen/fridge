@@ -199,11 +199,11 @@ def test_relay_gpio_set_preserves_other_bits(mock_gpio):
     mock_gpio.write.assert_called_once_with("B", 0x07)  # all three on
 
 
-def test_buttons_gpio_handle_off_button_sets_only_off_led(mock_gpio):
+def test_buttons_gpio_handle_off_button_emits_signal(mock_gpio):
     """
-    Off button should set only off LED active and emit idle mode signal.
+    Off button should emit idle mode signal without directly updating LEDs.
     """
-    mock_gpio.read.side_effect = [0xEF, 0x27]  # Port A off pressed, Port B relay bits active
+    mock_gpio.read.return_value = 0xEF  # Port A off pressed
     buttons = ButtonsGpio(mock_gpio)
     receiver = MagicMock()
     mode_idle.connect(receiver)
@@ -213,15 +213,15 @@ def test_buttons_gpio_handle_off_button_sets_only_off_led(mock_gpio):
     finally:
         mode_idle.disconnect(receiver)
 
-    mock_gpio.write.assert_called_once_with("B", 0x17)
+    mock_gpio.write.assert_not_called()
     receiver.assert_called_once_with(buttons)
 
 
-def test_buttons_gpio_handle_cool_down_button_sets_only_cool_down_led(mock_gpio):
+def test_buttons_gpio_handle_cool_down_button_emits_signal(mock_gpio):
     """
-    Cool down button should set only cool down LED active and emit cooling down signal.
+    Cool down button should emit cooling down signal without directly updating LEDs.
     """
-    mock_gpio.read.side_effect = [0xDF, 0x17]  # Port A cool down pressed, Port B has other bits
+    mock_gpio.read.return_value = 0xDF  # Port A cool down pressed
     buttons = ButtonsGpio(mock_gpio)
     receiver = MagicMock()
     mode_cooling_down.connect(receiver)
@@ -231,15 +231,15 @@ def test_buttons_gpio_handle_cool_down_button_sets_only_cool_down_led(mock_gpio)
     finally:
         mode_cooling_down.disconnect(receiver)
 
-    mock_gpio.write.assert_called_once_with("B", 0x27)
+    mock_gpio.write.assert_not_called()
     receiver.assert_called_once_with(buttons)
 
 
-def test_buttons_gpio_handle_cool_button_sets_only_cool_led(mock_gpio):
+def test_buttons_gpio_handle_cool_button_emits_signal(mock_gpio):
     """
-    Cool button should set only cool LED active and emit cool mode signal.
+    Cool button should emit cool mode signal without directly updating LEDs.
     """
-    mock_gpio.read.side_effect = [0xBF, 0x07]  # Port A cool pressed
+    mock_gpio.read.return_value = 0xBF  # Port A cool pressed
     buttons = ButtonsGpio(mock_gpio)
     receiver = MagicMock()
     mode_cool.connect(receiver)
@@ -249,7 +249,7 @@ def test_buttons_gpio_handle_cool_button_sets_only_cool_led(mock_gpio):
     finally:
         mode_cool.disconnect(receiver)
 
-    mock_gpio.write.assert_called_once_with("B", 0x47)
+    mock_gpio.write.assert_not_called()
     receiver.assert_called_once_with(buttons)
 
 
