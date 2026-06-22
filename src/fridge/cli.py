@@ -32,6 +32,7 @@ from fridge import (
     mode_cool,
 )
 from fridge.thermostat import Thermostat
+from fridge.mqtt import MqttBridge
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +250,7 @@ def run():
     gpio = I2cGpio()
     thermostat = Thermostat(gpio=gpio, config=cfg)
     buttons = ButtonsGpio(gpio)
+    mqtt_bridge = MqttBridge(thermostat=thermostat, config=cfg)
 
     try:
         # Connect blinker signals to thermostat and button LEDs
@@ -277,6 +279,7 @@ def run():
         # Start components
         thermostat.start()
         buttons.start_interrupt_listener()
+        mqtt_bridge.start()
 
         logger.info("Fridge controller running (press Ctrl+C to stop)")
 
@@ -294,6 +297,7 @@ def run():
     finally:
         # Graceful shutdown
         logger.info("Stopping fridge controller")
+        mqtt_bridge.stop()
         thermostat.stop()
         buttons.stop_interrupt_listener()
         logger.info("Fridge controller stopped")

@@ -10,6 +10,12 @@ mode_cooling_down = _signals.signal("mode_cooling_down")
 mode_cool = _signals.signal("mode_cool")
 
 
+# State change signals issued by the thermostat
+# Senders pass the new state value as keyword argument ``state``.
+mode_state_changed = _signals.signal("mode_state_changed")
+action_state_changed = _signals.signal("action_state_changed")
+
+
 # Status signals issued by the fridge
 cooler_started = _signals.signal("cooler_started")
 cooler_stopped = _signals.signal("cooler_stopped")
