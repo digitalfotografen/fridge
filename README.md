@@ -47,8 +47,11 @@ The fan should be active if humidity is above 55%, and switched off if below ths
 
 ## Energy cost saving
 The system can be configured to avoid running the heater and cooler during high-price hours.
-This is done by requesting the energy hourly prices from an external API (Tibber),
-and adapting the target temperature accordingly to run the heater and cooler at the right time.
+Electricity prices are fetched from [Tibber](https://developer.tibber.com/) in 15-minute slots
+and each slot is classified as `LOW_PRICE`, `NORMAL_PRICE` or `HIGH_PRICE`. The target temperature
+is then nudged for the active slot so the fridge pre-cools before expensive periods and coasts
+through them. See the `EnergyState` section below for details on the algorithm and the `[Tibber]`
+configuration keys.
 
 # Hardware
 This application runs on a Raspberry Pi with I2C connected sensors and GPPIO.
@@ -157,11 +160,42 @@ In **IDLE mode**, thermostat thresholds are not used for control decisions and a
 ### EnergyState
 The system can be configured to avoid running the heater and cooler during high-price hours.
 The EnergyState engine is used to switch between the three energy saving states.
+The active state is picked from a cached plan once per **15-minute slot**.
 - **LOW_PRICE**: The target temperature is lowered by 2 degrees Celsius when cooling is needed,
 and raised by 1 degrees Celsius when heating is needed.
 - **NORMAL_PRICE**: The target temperature is kept at the same value.
 - **HIGH_PRICE**: The target temperature is raised by 2 degrees Celsius when cooling is needed,
 and lowered by 2 degrees Celsius when heating is needed.
+
+#### Price source and planner
+Prices are fetched from the Tibber API in 15-minute slots and stored in a local SQLite cache
+(`~/fridge_data/fridge_prices.db` by default). The fetch runs on startup if the cache lacks
+the current slot, and then once per day at the configured local hour (`fetch_hour`, default
+16:00 `Europe/Stockholm`) in a background thread. Network calls use exponential backoff and
+failures are logged — the controller keeps running on cached data when offline.
+
+Each slot is classified using percentile bands over the planning window (more robust than
+absolute thresholds):
+- `LOW_PRICE` — price below the 33rd percentile
+- `NORMAL_PRICE` — price between the 33rd and 67th percentile
+- `HIGH_PRICE` — price above the 67th percentile
+
+A pre-cooling look-ahead then relabels up to `precool_lookahead_slots` `NORMAL` slots that
+precede a `HIGH` block as `LOW`, so the fridge cools down before the expensive period.
+The look-back stops at any earlier `HIGH` block (never overshooting into another high block),
+and consecutive `LOW` slots are capped at `max_consecutive_low_slots` to avoid over-cooling.
+
+The relevant `[Tibber]` configuration keys are:
+
+| Key                          | Default                              | Description                                                                 |
+|------------------------------|--------------------------------------|-----------------------------------------------------------------------------|
+| `api_key`                    | _(required)_                         | Tibber API token.                                                           |
+| `home_id`                    | _(empty)_                            | Optional home id when the account has several homes.                        |
+| `database_file`              | `~/fridge_data/fridge_prices.db`     | SQLite cache for prices and computed energy states.                         |
+| `fetch_hour`                 | `16`                                 | Local hour (0–23) for the daily fetch.                                      |
+| `timezone`                   | `Europe/Stockholm`                   | IANA timezone for the daily fetch.                                          |
+| `precool_lookahead_slots`    | `12`                                 | Maximum 15-min slots (3 h) to look back and pre-cool before a HIGH block.   |
+| `max_consecutive_low_slots`  | `4`                                  | Cap on consecutive LOW slots to avoid over-cooling.                         |
 
 ### Threshold generation helper
 The thermostat uses a helper function to generate mode-specific thresholds from configuration and `EnergyState`.
@@ -217,9 +251,15 @@ current mode (e.g. humidity target in `COOL_DOWN`, or all targets in
   "temperature": 4.2,
   "humidity": 58.6,
   "target_temperature": 5.0,
-  "target_humidity": 55.0
+  "target_humidity": 55.0,
+  "price": 1.2345,
+  "price_currency": "SEK"
 }
 ```
+
+`price` is the total Tibber price (including tax) for the current 15-minute slot and
+`price_currency` is the currency reported by Tibber. Both are `null` when no cached price
+is available for the current slot (e.g. before the first successful fetch).
 
 ### Subscribed topics
 
@@ -279,6 +319,7 @@ target temperatures, hysteresis, refresh rate, and energy price adjustments.
 | `Energy`       | Temperature adjustments for low and high energy prices     |
 | `Logging`      | Log file path                                             |
 | `MQTT`         | MQTT broker settings, topic prefix and publish interval   |
+| `Tibber`       | Tibber API key, price cache and energy-plan parameters     |
 
 ## CLI commands
 The application is invoked with `uv run fridge` followed by a command.
@@ -324,10 +365,17 @@ Example output:
   Action       : IDLE
   Energy       : NORMAL_PRICE
 
+=== Energy Price ===
+  Current price : 1.2345 SEK
+  Tibber level  : NORMAL
+
 === Sensor Readings ===
   Temperature : 6.5 °C
   Humidity    : 72.3 %
 ```
+
+The `Energy Price` section shows the cached Tibber price for the current 15-minute slot.
+It is reported as `N/A` when no cached price is available for the current slot.
 
 ### `run` — Run the fridge controller
 Starts the fridge controller as a long-running process. The thermostat loop reads
