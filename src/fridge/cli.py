@@ -10,6 +10,7 @@ import shutil
 import signal
 import threading
 from configparser import ConfigParser
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -31,6 +32,7 @@ from fridge import (
     mode_cool,
 )
 from fridge.thermostat import Thermostat
+from fridge.mqtt import MqttBridge
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +182,8 @@ def show():
 
         cool_down_start = cache.get("cool_down_start")
         if cool_down_start is not None:
-            click.echo(f"  Cool-down started at: {cool_down_start}")
+            formatted = datetime.fromtimestamp(cool_down_start).strftime("%Y-%m-%d %H:%M:%S")
+            click.echo(f"  Cool-down started at: {formatted}")
 
         click.echo("")
         click.echo("=== Sensor Readings ===")
@@ -247,6 +250,7 @@ def run():
     gpio = I2cGpio()
     thermostat = Thermostat(gpio=gpio, config=cfg)
     buttons = ButtonsGpio(gpio)
+    mqtt_bridge = MqttBridge(thermostat=thermostat, config=cfg)
 
     try:
         # Connect blinker signals to thermostat and button LEDs
@@ -275,6 +279,7 @@ def run():
         # Start components
         thermostat.start()
         buttons.start_interrupt_listener()
+        mqtt_bridge.start()
 
         logger.info("Fridge controller running (press Ctrl+C to stop)")
 
@@ -292,6 +297,7 @@ def run():
     finally:
         # Graceful shutdown
         logger.info("Stopping fridge controller")
+        mqtt_bridge.stop()
         thermostat.stop()
         buttons.stop_interrupt_listener()
         logger.info("Fridge controller stopped")

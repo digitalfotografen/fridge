@@ -11,6 +11,11 @@ from diskcache import Cache
 from fridge import ModeState, ActionState, EnergyState
 from fridge import cache_path
 from fridge import Sht30, RelayGpio, I2cGpio
+from fridge.signals import (
+    action_state_changed,
+    energy_state_changed,
+    mode_state_changed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +271,7 @@ class Thermostat:
         :return:
         """
         self._ensure_cache_open()
+        mode_changed = mode != self.mode
         self.mode = mode
         self.cache.set("mode", mode)
 
@@ -284,6 +290,8 @@ class Thermostat:
             self._temperature,
             self._humidity,
         )
+        if mode_changed:
+            mode_state_changed.send(self, state=mode)
 
     def get_mode(self) -> ModeState:
         """
@@ -300,6 +308,7 @@ class Thermostat:
         :return:
         """
         self._ensure_cache_open()
+        energy_changed = energy_state != self.energy_state
         self.energy_state = energy_state
         self.cache.set("energy_state", energy_state)
         self.thresholds = generate_thresholds(
@@ -311,6 +320,8 @@ class Thermostat:
             self._temperature,
             self._humidity,
         )
+        if energy_changed:
+            energy_state_changed.send(self, state=energy_state)
 
     def get_energy_state(self) -> EnergyState:
         """
@@ -334,7 +345,8 @@ class Thermostat:
         :return:
         """
         self._ensure_cache_open()
-        if action_state != self._action_state:
+        action_changed = action_state != self._action_state
+        if action_changed:
             logger.info(
                 "Action state changed to %s (temperature=%.1f°C, humidity=%.1f%%)",
                 action_state.name,
@@ -343,6 +355,8 @@ class Thermostat:
             )
         self._action_state = action_state
         self.cache.set("action_state", action_state)
+        if action_changed:
+            action_state_changed.send(self, state=action_state)
         self._set_relays(
             cooler=action_state is ActionState.COOLING,
             heater=action_state is ActionState.HEATING,

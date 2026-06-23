@@ -18,6 +18,8 @@ from .signals import heater_stopped as heater_stopped
 from .signals import fan_started as fan_started
 from .signals import fan_stopped as fan_stopped
 from .signals import energy_state_changed as energy_state_changed
+from .signals import mode_state_changed as mode_state_changed
+from .signals import action_state_changed as action_state_changed
 
 data_path = "~/fridge_data"
 cache_path = "~/fridge_data/cache"

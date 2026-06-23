@@ -186,10 +186,59 @@ The application logs temperature, humidity and states to an SQLite database once
 The database can be exported to a CSV file using the --export cli option.
 
 ## MQTT
-To be implemented later
-The application can publish and subscribe to MQTT topics for logging and control.
-This is done using the paho-mqtt library.
-This is not used for temperature regulation.
+The application publishes state and measurements to an MQTT broker and listens
+for mode commands. This is implemented in `fridge.mqtt.MqttBridge` using the
+`paho-mqtt` library. MQTT is not used for temperature regulation: the
+thermostat keeps running even if the broker is unreachable.
+
+All topics are prefixed with `mqtt_topic_prefix` from the `[MQTT]` section of
+the configuration (default `fridge/`).
+
+### Published topics
+
+| Topic                          | Payload                              | Retain | When                                  |
+|--------------------------------|--------------------------------------|--------|---------------------------------------|
+| `state/online`                 | `online` / `offline` (LWT)           | yes    | On connect / disconnect               |
+| `state/mode`                   | `IDLE` / `COOL_DOWN` / `COOL`        | yes    | On connect and whenever it changes    |
+| `state/action`                 | `IDLE` / `COOLING` / `HEATING`       | yes    | On connect and whenever it changes    |
+| `state/energy`                 | `LOW_PRICE` / `NORMAL_PRICE` / `HIGH_PRICE` | yes | On connect and whenever it changes |
+| `status`                       | JSON snapshot (see below)            | yes    | Every `update_interval` seconds       |
+
+The `status` topic carries a single JSON object containing all current
+states, measurements and active targets. Targets that are not active in the
+current mode (e.g. humidity target in `COOL_DOWN`, or all targets in
+`IDLE`) are reported as `null`.
+
+```json
+{
+  "mode": "COOL",
+  "action": "COOLING",
+  "energy": "HIGH_PRICE",
+  "temperature": 4.2,
+  "humidity": 58.6,
+  "target_temperature": 5.0,
+  "target_humidity": 55.0
+}
+```
+
+### Subscribed topics
+
+| Topic         | Accepted payloads                | Effect                                              |
+|---------------|----------------------------------|-----------------------------------------------------|
+| `cmd/mode`    | `IDLE`, `COOL_DOWN`, `COOL`      | Same as pressing the corresponding physical button. |
+
+Mode commands received over MQTT are routed through the same internal signals
+as the buttons, so the front-panel mode LEDs are updated together with the
+thermostat state.
+
+### Example
+```bash
+# Watch all state and measurement updates
+mosquitto_sub -h mqtt.local -u fridge -t 'fridge/#' -v
+
+# Switch the fridge to cool-down mode remotely
+mosquitto_pub -h mqtt.local -u fridge -t fridge/cmd/mode -m COOL_DOWN
+```
 
 # Installation and usage
 
@@ -229,7 +278,7 @@ target temperatures, hysteresis, refresh rate, and energy price adjustments.
 | `CoolMode`     | Target temperature, hysteresis, freeze guard and humidity  |
 | `Energy`       | Temperature adjustments for low and high energy prices     |
 | `Logging`      | Log file path                                             |
-| `MQTT`         | MQTT broker settings (not yet implemented)                |
+| `MQTT`         | MQTT broker settings, topic prefix and publish interval   |
 
 ## CLI commands
 The application is invoked with `uv run fridge` followed by a command.
