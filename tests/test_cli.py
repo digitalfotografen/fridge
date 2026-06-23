@@ -134,6 +134,7 @@ def test_show_displays_relay_states(runner: CliRunner) -> None:
         patch("fridge.cli.RelayGpio") as mock_relay_cls,
         patch("fridge.cli.Cache") as mock_cache_cls,
         patch("fridge.cli.Sht30", return_value=mock_sensor),
+        patch("fridge.cli.EnergyDatabase") as mock_db_cls,
     ):
         mock_relay = mock_relay_cls.return_value
         mock_relay.read_cooler_relay.return_value = True
@@ -142,6 +143,8 @@ def test_show_displays_relay_states(runner: CliRunner) -> None:
 
         mock_cache = mock_cache_cls.return_value
         mock_cache.get.return_value = None
+
+        mock_db_cls.return_value.get_price_at.return_value = None
 
         result = runner.invoke(cli, ["show"])
 
@@ -163,6 +166,7 @@ def test_show_does_not_write_gpio(runner: CliRunner) -> None:
         patch("fridge.cli.RelayGpio") as mock_relay_cls,
         patch("fridge.cli.Cache") as mock_cache_cls,
         patch("fridge.cli.Sht30") as mock_sht30_cls,
+        patch("fridge.cli.EnergyDatabase") as mock_db_cls,
     ):
         mock_relay = mock_relay_cls.return_value
         mock_relay.read_cooler_relay.return_value = False
@@ -172,6 +176,7 @@ def test_show_does_not_write_gpio(runner: CliRunner) -> None:
         mock_cache = mock_cache_cls.return_value
         mock_cache.get.return_value = None
 
+        mock_db_cls.return_value.get_price_at.return_value = None
         mock_sht30_cls.return_value.read_data.return_value = (5.0, 50.0)
 
         result = runner.invoke(cli, ["show"])
@@ -193,6 +198,7 @@ def test_show_displays_cool_down_start_as_swedish_datetime(runner: CliRunner) ->
         patch("fridge.cli.RelayGpio") as mock_relay_cls,
         patch("fridge.cli.Cache") as mock_cache_cls,
         patch("fridge.cli.Sht30") as mock_sht30_cls,
+        patch("fridge.cli.EnergyDatabase") as mock_db_cls,
     ):
         mock_relay = mock_relay_cls.return_value
         mock_relay.read_cooler_relay.return_value = False
@@ -205,6 +211,7 @@ def test_show_displays_cool_down_start_as_swedish_datetime(runner: CliRunner) ->
             1781465818.2116003 if key == "cool_down_start" else None
         )
 
+        mock_db_cls.return_value.get_price_at.return_value = None
         mock_sht30_cls.return_value.read_data.return_value = (5.0, 50.0)
 
         result = runner.invoke(cli, ["show"])
@@ -214,6 +221,43 @@ def test_show_displays_cool_down_start_as_swedish_datetime(runner: CliRunner) ->
     assert f"Cool-down started at: {expected}" in result.output
     # Ensure the raw timestamp is NOT shown
     assert "1781465818" not in result.output
+
+
+def test_show_displays_current_price(runner: CliRunner) -> None:
+    """show command displays the current Tibber price for the active slot."""
+    from datetime import UTC, datetime
+
+    from fridge.energy_db import PriceSlot
+
+    mock_gpio = MagicMock()
+    mock_gpio.read.return_value = 0x00
+
+    now = datetime.now(tz=UTC)
+    slot = PriceSlot(starts_at=now, total=1.2345, currency="SEK", level="NORMAL")
+
+    with (
+        patch("fridge.cli.I2cGpio", return_value=mock_gpio),
+        patch("fridge.cli.RelayGpio") as mock_relay_cls,
+        patch("fridge.cli.Cache") as mock_cache_cls,
+        patch("fridge.cli.Sht30") as mock_sht30_cls,
+        patch("fridge.cli.EnergyDatabase") as mock_db_cls,
+    ):
+        mock_relay = mock_relay_cls.return_value
+        mock_relay.read_cooler_relay.return_value = False
+        mock_relay.read_heater_relay.return_value = False
+        mock_relay.read_vent_fan_relay.return_value = False
+
+        mock_cache_cls.return_value.get.return_value = None
+        mock_db_cls.return_value.get_price_at.return_value = slot
+        mock_sht30_cls.return_value.read_data.return_value = (5.0, 50.0)
+
+        result = runner.invoke(cli, ["show"])
+
+    assert result.exit_code == 0
+    assert "Energy Price" in result.output
+    assert "1.2345" in result.output
+    assert "SEK" in result.output
+    assert "NORMAL" in result.output
 
 
 def test_show_sensor_error_handled(runner: CliRunner) -> None:
@@ -226,6 +270,7 @@ def test_show_sensor_error_handled(runner: CliRunner) -> None:
         patch("fridge.cli.RelayGpio") as mock_relay_cls,
         patch("fridge.cli.Cache") as mock_cache_cls,
         patch("fridge.cli.Sht30") as mock_sht30_cls,
+        patch("fridge.cli.EnergyDatabase") as mock_db_cls,
     ):
         mock_relay = mock_relay_cls.return_value
         mock_relay.read_cooler_relay.return_value = False
@@ -235,6 +280,7 @@ def test_show_sensor_error_handled(runner: CliRunner) -> None:
         mock_cache = mock_cache_cls.return_value
         mock_cache.get.return_value = None
 
+        mock_db_cls.return_value.get_price_at.return_value = None
         mock_sht30_cls.return_value.read_data.side_effect = OSError("No device")
 
         result = runner.invoke(cli, ["show"])
@@ -275,6 +321,11 @@ def test_run_starts_and_stops_thermostat(runner: CliRunner, tmp_data_dir: Path) 
         patch("fridge.cli.I2cGpio", return_value=mock_gpio),
         patch("fridge.cli.Thermostat", return_value=mock_thermostat),
         patch("fridge.cli.ButtonsGpio", return_value=mock_buttons),
+        patch("fridge.cli.MqttBridge"),
+        patch("fridge.cli.EnergyDatabase"),
+        patch("fridge.cli.TibberPriceFetcher"),
+        patch("fridge.cli.EnergyPlanner"),
+        patch("fridge.cli.EnergyController"),
         patch("fridge.cli.load_config") as mock_load_config,
         patch("fridge.cli.signal"),
         patch("fridge.cli.threading") as mock_threading,

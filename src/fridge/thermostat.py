@@ -118,7 +118,7 @@ def generate_thresholds(
             cooler_target = target_temperature + cool_adjustment
 
             return ThermostatThresholds(
-                target_temperature=target_temperature,
+                target_temperature=cooler_target,
                 target_humidity=None,
                 heater_on_threshold=heater_target - hysteresis,
                 heater_off_threshold=heater_target + hysteresis,
@@ -159,7 +159,7 @@ def generate_thresholds(
             cooler_target = target_temperature + cool_adjustment
 
             return ThermostatThresholds(
-                target_temperature=target_temperature,
+                target_temperature=cooler_target,
                 target_humidity=target_humidity,
                 heater_on_threshold=max(freeze_guard, heater_target - hysteresis),
                 heater_off_threshold=max(freeze_guard, heater_target + hysteresis),

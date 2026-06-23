@@ -35,6 +35,7 @@ import json
 import logging
 import threading
 from configparser import ConfigParser
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import paho.mqtt.client as mqtt_client
@@ -50,6 +51,7 @@ from fridge.signals import (
 )
 
 if TYPE_CHECKING:
+    from fridge.energy_db import EnergyDatabase
     from fridge.thermostat import Thermostat
 
 logger = logging.getLogger(__name__)
@@ -76,10 +78,21 @@ class MqttBridge:
 
     :param thermostat: Thermostat instance to read measurements and state from
     :param config: Application configuration (uses ``[MQTT]`` section)
+    :param energy_database: Optional :class:`~fridge.energy_db.EnergyDatabase`
+        used to look up the current Tibber price for the status payload. When
+        ``None`` the ``price`` and ``price_currency`` fields are reported as
+        ``null``.
     """
 
-    def __init__(self, thermostat: Thermostat, config: ConfigParser):
+    def __init__(
+        self,
+        thermostat: Thermostat,
+        config: ConfigParser,
+        *,
+        energy_database: EnergyDatabase | None = None,
+    ):
         self._thermostat = thermostat
+        self._energy_database = energy_database
         self._broker = config.get("MQTT", "mqtt_broker", fallback=DEFAULT_BROKER)
         self._port = config.getint("MQTT", "mqtt_port", fallback=DEFAULT_PORT)
         self._prefix = config.get("MQTT", "mqtt_topic_prefix", fallback=DEFAULT_PREFIX)
@@ -282,6 +295,18 @@ class MqttBridge:
             target_temperature = thresholds.target_temperature
             target_humidity = thresholds.target_humidity
 
+        price: float | None = None
+        price_currency: str | None = None
+        if self._energy_database is not None:
+            try:
+                slot = self._energy_database.get_price_at(datetime.now(tz=UTC))
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("Failed to read current price: %s", exc)
+                slot = None
+            if slot is not None:
+                price = round(slot.total, 4)
+                price_currency = slot.currency or None
+
         return {
             "mode": self._thermostat.get_mode().name,
             "action": self._thermostat.get_action_state().name,
@@ -292,6 +317,8 @@ class MqttBridge:
                 round(target_temperature, 1) if target_temperature is not None else None
             ),
             "target_humidity": (round(target_humidity, 1) if target_humidity is not None else None),
+            "price": price,
+            "price_currency": price_currency,
         }
 
     # ------------------------------------------------------------------

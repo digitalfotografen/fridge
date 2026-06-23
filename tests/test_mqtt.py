@@ -249,6 +249,8 @@ def test_publish_measurements_publishes_single_json_status(mock_client_factory):
         "humidity": 58.6,
         "target_temperature": 5.0,
         "target_humidity": 55.0,
+        "price": None,
+        "price_currency": None,
     }
     # No per-value topics anymore.
     assert f"{PREFIX}measurement/temperature" not in p
@@ -256,6 +258,35 @@ def test_publish_measurements_publishes_single_json_status(mock_client_factory):
     assert f"{PREFIX}target/temperature" not in p
     assert f"{PREFIX}target/humidity" not in p
     bridge.stop()
+
+
+def test_publish_measurements_includes_current_price(mock_client_factory):
+    """When an energy database is provided, the status payload exposes the
+    current 15-minute Tibber price and currency."""
+    import json
+    from datetime import UTC, datetime
+
+    from fridge.energy_db import EnergyDatabase, PriceSlot
+
+    _factory, client = mock_client_factory
+    database = EnergyDatabase(":memory:")
+    try:
+        now = datetime.now(tz=UTC).replace(second=0, microsecond=0)
+        slot_start = now.replace(minute=(now.minute // 15) * 15)
+        database.upsert_prices([PriceSlot(starts_at=slot_start, total=1.2345, currency="SEK")])
+        bridge = MqttBridge(_FakeThermostat(), _make_config(), energy_database=database)
+        bridge.start()
+        client.publish.reset_mock()
+
+        bridge.publish_measurements()
+
+        p = _published(client)
+        data = json.loads(p[f"{PREFIX}status"][0])
+        assert data["price"] == 1.2345
+        assert data["price_currency"] == "SEK"
+        bridge.stop()
+    finally:
+        database.close()
 
 
 def test_publish_measurements_reports_none_targets_as_null(mock_client_factory):
