@@ -107,7 +107,10 @@ class EnergyDatabase:
             parent = os.path.dirname(db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._connection = sqlite3.connect(db_path)
+        # ``check_same_thread=False`` lets the controller, the Tibber fetcher
+        # and the test threads share one connection. SQLite serialises writes
+        # internally; our access pattern is low-frequency.
+        self._connection = sqlite3.connect(db_path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._ensure_schema()
 

@@ -24,6 +24,10 @@ from fridge import (
     ModeState,
     ActionState,
     EnergyState,
+    EnergyController,
+    EnergyDatabase,
+    EnergyPlanner,
+    TibberPriceFetcher,
     cache_path,
     data_path,
     i2c_scan,
@@ -252,6 +256,14 @@ def run():
     buttons = ButtonsGpio(gpio)
     mqtt_bridge = MqttBridge(thermostat=thermostat, config=cfg)
 
+    # Shared energy database for prices + computed energy states.
+    energy_database = EnergyDatabase(
+        cfg.get("Tibber", "database_file", fallback="~/fridge_data/fridge_prices.db")
+    )
+    tibber_fetcher = TibberPriceFetcher(cfg, database=energy_database)
+    energy_planner = EnergyPlanner(cfg, database=energy_database)
+    energy_controller = EnergyController(thermostat=thermostat, planner=energy_planner)
+
     try:
         # Connect blinker signals to thermostat and button LEDs
         def _on_mode_idle(sender, **kwargs):
@@ -280,6 +292,8 @@ def run():
         thermostat.start()
         buttons.start_interrupt_listener()
         mqtt_bridge.start()
+        tibber_fetcher.start()
+        energy_controller.start()
 
         logger.info("Fridge controller running (press Ctrl+C to stop)")
 
@@ -297,6 +311,9 @@ def run():
     finally:
         # Graceful shutdown
         logger.info("Stopping fridge controller")
+        energy_controller.stop()
+        tibber_fetcher.stop()
+        energy_database.close()
         mqtt_bridge.stop()
         thermostat.stop()
         buttons.stop_interrupt_listener()

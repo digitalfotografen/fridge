@@ -14,6 +14,11 @@ from .energy_db import EnergyStateSlot as EnergyStateSlot
 
 from .tibber_client import TibberPriceFetcher as TibberPriceFetcher
 
+from .energy_plan import EnergyPlanner as EnergyPlanner
+from .energy_plan import classify_prices as classify_prices
+
+from .energy_controller import EnergyController as EnergyController
+
 from .signals import mode_idle as mode_idle
 from .signals import mode_cooling_down as mode_cooling_down
 from .signals import mode_cool as mode_cool
