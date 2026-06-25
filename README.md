@@ -115,6 +115,7 @@ CLI commands are used to control the application.
 - **show**: Display the current relay, LED and button states by reading the GPIO (read-only, safe while daemon is running).
 - **run**: Run the fridge controller daemon. Starts temperature regulation, button interrupt listener, and blocks until SIGINT/SIGTERM.
 - **scan**: Scan the I2C bus for connected devices.
+- **export**: Export the logged database (prices, energy states and measurements) to CSV or Parquet.
 - **test**: Run a hardware test sequence to verify all components during installation.
 - **-h / --help**: Display help message.
 
@@ -168,8 +169,9 @@ and raised by 1 degrees Celsius when heating is needed.
 and lowered by 2 degrees Celsius when heating is needed.
 
 #### Price source and planner
-Prices are fetched from the Tibber API in 15-minute slots and stored in a local SQLite cache
-(`~/fridge_data/fridge_prices.db` by default). The fetch runs on startup if the cache lacks
+Prices are fetched from the Tibber API in 15-minute slots and stored in the shared local
+SQLite database (`~/fridge_data/fridge_prices.db` by default, configured by `[Logging]
+database_file`). The fetch runs on startup if the cache lacks
 the current slot, and then once per day at the configured local hour (`fetch_hour`, default
 16:00 `Europe/Stockholm`) in a background thread. Network calls use exponential backoff and
 failures are logged — the controller keeps running on cached data when offline.
@@ -185,13 +187,14 @@ precede a `HIGH` block as `LOW`, so the fridge cools down before the expensive p
 The look-back stops at any earlier `HIGH` block (never overshooting into another high block),
 and consecutive `LOW` slots are capped at `max_consecutive_low_slots` to avoid over-cooling.
 
-The relevant `[Tibber]` configuration keys are:
+The shared SQLite database used for prices, energy states and logged measurements is
+configured by `[Logging] database_file` (see the *Logging* section). The relevant
+`[Tibber]` configuration keys are:
 
 | Key                          | Default                              | Description                                                                 |
 |------------------------------|--------------------------------------|-----------------------------------------------------------------------------|
 | `api_key`                    | _(required)_                         | Tibber API token.                                                           |
 | `home_id`                    | _(empty)_                            | Optional home id when the account has several homes.                        |
-| `database_file`              | `~/fridge_data/fridge_prices.db`     | SQLite cache for prices and computed energy states.                         |
 | `fetch_hour`                 | `16`                                 | Local hour (0–23) for the daily fetch.                                      |
 | `timezone`                   | `Europe/Stockholm`                   | IANA timezone for the daily fetch.                                          |
 | `precool_lookahead_slots`    | `12`                                 | Maximum 15-min slots (3 h) to look back and pre-cool before a HIGH block.   |
@@ -216,8 +219,40 @@ The configuration file is read when the application starts.
 The application logs events (like state changes) to a file named fridge.log in the current working directory
 using the standard Python logging library.
 
-The application logs temperature, humidity and states to an SQLite database once per minute.
-The database can be exported to a CSV file using the --export cli option.
+The application logs temperature, humidity and controller states to an SQLite database once per
+`measurement_interval` seconds (default 60). These measurements are stored in the **same** database
+as the Tibber prices and computed energy states (`[Logging] database_file`, default
+`~/fridge_data/fridge_prices.db`), so equipment performance and energy-cost savings can be analysed
+together. Each measurement row records the temperature, humidity, mode, action state, energy state,
+active targets and the price of the current slot.
+
+The relevant `[Logging]` configuration keys are:
+
+| Key                    | Default                            | Description                                          |
+|------------------------|------------------------------------|------------------------------------------------------|
+| `log_file`             | `~/fridge.log`                     | Event log file path.                                 |
+| `database_file`        | `~/fridge_data/fridge_prices.db`   | Shared SQLite database for prices, states and logs.  |
+| `measurement_interval` | `60`                               | Seconds between logged measurement snapshots.        |
+
+### Exporting data
+The database can be exported to CSV or Parquet with the `export` command:
+
+```bash
+# Merged CSV (default): all tables joined on time into one file
+uv run fridge export --output fridge.csv
+
+# One CSV file per table (fridge_prices.csv, fridge_energy_states.csv, fridge_measurements.csv)
+uv run fridge export --output fridge.csv --separate-tables
+
+# Parquet export
+uv run fridge export --output fridge.parquet --format parquet
+
+# Restrict to a time range (ISO-8601, UTC)
+uv run fridge export --start 2026-01-01T00:00:00 --end 2026-02-01T00:00:00
+```
+
+By default the three tables are merged into a single file (joined on their timestamp). Use
+`--separate-tables` to write one file per table, and `--format parquet` for columnar Parquet output.
 
 ## MQTT
 The application publishes state and measurements to an MQTT broker and listens
@@ -317,7 +352,7 @@ target temperatures, hysteresis, refresh rate, and energy price adjustments.
 | `CoolDownMode` | Target temperature, hysteresis and auto-switch duration    |
 | `CoolMode`     | Target temperature, hysteresis, freeze guard and humidity  |
 | `Energy`       | Temperature adjustments for low and high energy prices     |
-| `Logging`      | Log file path                                             |
+| `Logging`      | Log file, shared database file and measurement interval    |
 | `MQTT`         | MQTT broker settings, topic prefix and publish interval   |
 | `Tibber`       | Tibber API key, price cache and energy-plan parameters     |
 
@@ -414,6 +449,23 @@ sudo systemctl enable fridge.service
 sudo systemctl start fridge.service
 ```
 
+### `export` — Export logged data
+Exports the logged database (prices, energy states and measurements) to CSV (default) or
+Parquet for analysis. By default all tables are merged into a single file; use
+`--separate-tables` to write one file per table.
+
+```bash
+# Merged CSV (default)
+uv run fridge export --output fridge.csv
+
+# One file per table
+uv run fridge export --output fridge.csv --separate-tables
+
+# Parquet, restricted to a time range
+uv run fridge export --output fridge.parquet --format parquet \
+    --start 2026-01-01T00:00:00 --end 2026-02-01T00:00:00
+```
+
 ### `test` — Hardware test sequence
 Runs a predefined sequence of hardware checks to verify that all components
 (sensor, LEDs, relays) are functioning correctly during installation.
@@ -463,6 +515,11 @@ errors without crashing:
 Events such as mode changes and relay switches are logged to a file (default
 `~/fridge.log`) and to the console. The log file path can be changed in the
 `[Logging]` section of the configuration file.
+
+In addition, temperature, humidity and controller states are logged once per
+`measurement_interval` seconds to the shared SQLite database (`[Logging]
+database_file`). See the *Logging* section above and the `export` command for
+how to retrieve this data for analysis.
 
 ## Development
 

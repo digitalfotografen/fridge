@@ -44,7 +44,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from fridge.energy_db import EnergyDatabase, PriceSlot
+from fridge.energy_db import EnergyDatabase, PriceSlot, database_path
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ class TibberPriceFetcher:
         self._timezone = ZoneInfo(timezone_name)
 
         if database is None:
-            db_path = config.get("Tibber", "database_file", fallback=DEFAULT_DATABASE_FILE)
+            db_path = database_path(config)
             self._database = EnergyDatabase(db_path)
             self._owns_database = True
         else:

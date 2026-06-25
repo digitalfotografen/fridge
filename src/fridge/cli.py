@@ -27,9 +27,11 @@ from fridge import (
     EnergyController,
     EnergyDatabase,
     EnergyPlanner,
+    MeasurementLogger,
     TibberPriceFetcher,
     cache_path,
     data_path,
+    database_path,
     i2c_scan,
     mode_idle,
     mode_cooling_down,
@@ -193,13 +195,7 @@ def show():
         click.echo("")
         click.echo("=== Energy Price ===")
         try:
-            energy_database = EnergyDatabase(
-                cfg.get(
-                    "Tibber",
-                    "database_file",
-                    fallback="~/fridge_data/fridge_prices.db",
-                )
-            )
+            energy_database = EnergyDatabase(database_path(cfg))
             try:
                 price_slot = energy_database.get_price_at(datetime.now(tz=UTC))
                 if price_slot is None:
@@ -279,13 +275,16 @@ def run():
     gpio = I2cGpio()
     thermostat = Thermostat(gpio=gpio, config=cfg)
     buttons = ButtonsGpio(gpio)
-    # Shared energy database for prices + computed energy states.
-    energy_database = EnergyDatabase(
-        cfg.get("Tibber", "database_file", fallback="~/fridge_data/fridge_prices.db")
-    )
+    # Shared database for prices, computed energy states and measurements.
+    energy_database = EnergyDatabase(database_path(cfg))
     tibber_fetcher = TibberPriceFetcher(cfg, database=energy_database)
     energy_planner = EnergyPlanner(cfg, database=energy_database)
     energy_controller = EnergyController(thermostat=thermostat, planner=energy_planner)
+    measurement_logger = MeasurementLogger(
+        thermostat=thermostat,
+        database=energy_database,
+        interval_seconds=cfg.getfloat("Logging", "measurement_interval", fallback=60.0),
+    )
 
     mqtt_bridge = MqttBridge(thermostat=thermostat, config=cfg, energy_database=energy_database)
 
@@ -319,6 +318,7 @@ def run():
         mqtt_bridge.start()
         tibber_fetcher.start()
         energy_controller.start()
+        measurement_logger.start()
 
         logger.info("Fridge controller running (press Ctrl+C to stop)")
 
@@ -336,6 +336,7 @@ def run():
     finally:
         # Graceful shutdown
         logger.info("Stopping fridge controller")
+        measurement_logger.stop()
         energy_controller.stop()
         tibber_fetcher.stop()
         energy_database.close()
@@ -344,3 +345,54 @@ def run():
         buttons.stop_interrupt_listener()
         logger.info("Fridge controller stopped")
         logging.shutdown()
+
+
+@cli.command()
+@click.option(
+    "--output",
+    "-o",
+    default="fridge_export.csv",
+    show_default=True,
+    help="Output file path. Table names are appended when --separate-tables is used.",
+)
+@click.option(
+    "--format",
+    "export_format",
+    type=click.Choice(["csv", "parquet"]),
+    default="csv",
+    show_default=True,
+    help="Output file format.",
+)
+@click.option(
+    "--separate-tables/--merged",
+    default=False,
+    show_default=True,
+    help="Write one file per table instead of merging all tables into one file.",
+)
+@click.option("--start", default=None, help="Optional ISO-8601 inclusive lower time bound (UTC).")
+@click.option("--end", default=None, help="Optional ISO-8601 exclusive upper time bound (UTC).")
+def export(output, export_format, separate_tables, start, end):
+    """Export the logged database to CSV or Parquet for analysis."""
+    from fridge.exporter import export_database
+
+    expanded_data = os.path.expanduser(data_path)
+    cfg = load_config(expanded_data)
+
+    start_dt = datetime.fromisoformat(start) if start else None
+    end_dt = datetime.fromisoformat(end) if end else None
+
+    database = EnergyDatabase(database_path(cfg))
+    try:
+        written = export_database(
+            database,
+            output,
+            fmt=export_format,
+            separate_tables=separate_tables,
+            start=start_dt,
+            end=end_dt,
+        )
+    finally:
+        database.close()
+
+    for path in written:
+        click.echo(f"Wrote {path}")

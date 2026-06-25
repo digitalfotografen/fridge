@@ -11,6 +11,8 @@ from .enums import EnergyState as EnergyState
 from .energy_db import EnergyDatabase as EnergyDatabase
 from .energy_db import PriceSlot as PriceSlot
 from .energy_db import EnergyStateSlot as EnergyStateSlot
+from .energy_db import Measurement as Measurement
+from .energy_db import database_path as database_path
 
 from .tibber_client import TibberPriceFetcher as TibberPriceFetcher
 
@@ -18,6 +20,8 @@ from .energy_plan import EnergyPlanner as EnergyPlanner
 from .energy_plan import classify_prices as classify_prices
 
 from .energy_controller import EnergyController as EnergyController
+
+from .measurement_logger import MeasurementLogger as MeasurementLogger
 
 from .signals import mode_idle as mode_idle
 from .signals import mode_cooling_down as mode_cooling_down

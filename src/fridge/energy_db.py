@@ -12,6 +12,12 @@ database (``~/fridge_data/fridge_prices.db`` by default):
   classification algorithm for each 15-minute slot. This table is a cache of
   the planning result so the control loop does not have to recompute it on
   every tick.
+- ``measurements``: periodic snapshots of temperature, humidity and controller
+  states logged once per minute. These are kept for later analysis of equipment
+  performance and energy-cost savings.
+
+This is the single database for the whole application (prices, energy states and
+measurements share one SQLite file).
 
 All timestamps are stored as ISO-8601 strings in UTC. Datetimes passed in are
 normalised to timezone-aware UTC before being stored, and returned as
@@ -26,6 +32,21 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fridge.enums import EnergyState
+
+DEFAULT_DATABASE_FILE = "~/fridge_data/fridge_prices.db"
+
+
+def database_path(config) -> str:
+    """
+    Return the configured path to the shared application database.
+
+    The path is read from the ``[Logging] database_file`` key, falling back to
+    :data:`DEFAULT_DATABASE_FILE` when it is missing.
+
+    :param config: A :class:`configparser.ConfigParser` instance.
+    :return: The database path (``~`` is expanded by :class:`EnergyDatabase`).
+    """
+    return config.get("Logging", "database_file", fallback=DEFAULT_DATABASE_FILE)
 
 
 @dataclass(frozen=True)
@@ -60,6 +81,36 @@ class EnergyStateSlot:
 
     starts_at: datetime
     energy_state: EnergyState
+
+
+@dataclass(frozen=True)
+class Measurement:
+    """
+    A single periodic measurement snapshot.
+
+    :param recorded_at: Time the measurement was taken (timezone-aware, stored
+        in UTC).
+    :param temperature: Internal temperature in degrees Celsius, if available.
+    :param humidity: Relative humidity in percent, if available.
+    :param mode: Current :class:`~fridge.enums.ModeState` name.
+    :param action_state: Current :class:`~fridge.enums.ActionState` name.
+    :param energy_state: Current :class:`~fridge.enums.EnergyState` name.
+    :param target_temperature: Active target temperature, if any.
+    :param target_humidity: Active target humidity, if any.
+    :param price: Total price for the current slot, if available.
+    :param price_currency: Currency of ``price``, if available.
+    """
+
+    recorded_at: datetime
+    temperature: float | None
+    humidity: float | None
+    mode: str
+    action_state: str
+    energy_state: str
+    target_temperature: float | None = None
+    target_humidity: float | None = None
+    price: float | None = None
+    price_currency: str | None = None
 
 
 def _to_utc(value: datetime) -> datetime:
@@ -135,6 +186,22 @@ class EnergyDatabase:
                 starts_at    TEXT PRIMARY KEY,
                 energy_state INTEGER NOT NULL,
                 computed_at  TEXT NOT NULL
+            )
+            """
+        )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS measurements (
+                recorded_at        TEXT PRIMARY KEY,
+                temperature        REAL,
+                humidity           REAL,
+                mode               TEXT NOT NULL,
+                action_state       TEXT NOT NULL,
+                energy_state       TEXT NOT NULL,
+                target_temperature REAL,
+                target_humidity    REAL,
+                price              REAL,
+                price_currency     TEXT
             )
             """
         )
@@ -303,11 +370,87 @@ class EnergyDatabase:
             level=row["level"],
         )
 
+    def insert_measurement(self, measurement: Measurement) -> None:
+        """
+        Insert or replace a single measurement snapshot.
+
+        Existing rows with the same ``recorded_at`` are replaced, making this
+        safe to call repeatedly.
+
+        :param measurement: The :class:`Measurement` to store.
+        """
+        self._connection.execute(
+            """
+            INSERT INTO measurements (
+                recorded_at, temperature, humidity, mode, action_state,
+                energy_state, target_temperature, target_humidity, price, price_currency
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(recorded_at) DO UPDATE SET
+                temperature=excluded.temperature,
+                humidity=excluded.humidity,
+                mode=excluded.mode,
+                action_state=excluded.action_state,
+                energy_state=excluded.energy_state,
+                target_temperature=excluded.target_temperature,
+                target_humidity=excluded.target_humidity,
+                price=excluded.price,
+                price_currency=excluded.price_currency
+            """,
+            (
+                _iso(measurement.recorded_at),
+                measurement.temperature,
+                measurement.humidity,
+                measurement.mode,
+                measurement.action_state,
+                measurement.energy_state,
+                measurement.target_temperature,
+                measurement.target_humidity,
+                measurement.price,
+                measurement.price_currency,
+            ),
+        )
+        self._connection.commit()
+
+    def get_measurements(self, start: datetime, end: datetime) -> list[Measurement]:
+        """
+        Return measurements with ``start <= recorded_at < end``, ordered by time.
+
+        :param start: Inclusive lower bound (UTC-normalised).
+        :param end: Exclusive upper bound (UTC-normalised).
+        :return: Ordered list of :class:`Measurement`.
+        """
+        rows = self._connection.execute(
+            """
+            SELECT recorded_at, temperature, humidity, mode, action_state,
+                   energy_state, target_temperature, target_humidity, price, price_currency
+            FROM measurements
+            WHERE recorded_at >= ? AND recorded_at < ?
+            ORDER BY recorded_at
+            """,
+            (_iso(start), _iso(end)),
+        ).fetchall()
+        return [
+            Measurement(
+                recorded_at=_parse(row["recorded_at"]),
+                temperature=row["temperature"],
+                humidity=row["humidity"],
+                mode=row["mode"],
+                action_state=row["action_state"],
+                energy_state=row["energy_state"],
+                target_temperature=row["target_temperature"],
+                target_humidity=row["target_humidity"],
+                price=row["price"],
+                price_currency=row["price_currency"],
+            )
+            for row in rows
+        ]
+
     def prune(self, older_than: datetime) -> int:
         """
-        Delete price and energy-state slots starting before *older_than*.
+        Delete price, energy-state and measurement rows before *older_than*.
 
-        :param older_than: Slots with ``starts_at < older_than`` are removed.
+        :param older_than: Rows with timestamps ``< older_than`` are removed.
         :return: The total number of deleted rows.
         """
         cutoff = _iso(older_than)
@@ -315,6 +458,10 @@ class EnergyDatabase:
         deleted = cursor.rowcount
         cursor = self._connection.execute(
             "DELETE FROM energy_states WHERE starts_at < ?", (cutoff,)
+        )
+        deleted += cursor.rowcount
+        cursor = self._connection.execute(
+            "DELETE FROM measurements WHERE recorded_at < ?", (cutoff,)
         )
         deleted += cursor.rowcount
         self._connection.commit()
