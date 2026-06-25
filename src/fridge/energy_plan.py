@@ -35,7 +35,7 @@ import logging
 from configparser import ConfigParser
 from datetime import UTC, datetime, timedelta
 
-from fridge.energy_db import EnergyDatabase, EnergyStateSlot, PriceSlot
+from fridge.energy_db import EnergyDatabase, EnergyStateSlot, PriceSlot, database_path
 from fridge.enums import EnergyState
 
 logger = logging.getLogger(__name__)
@@ -181,7 +181,7 @@ class EnergyPlanner:
         )
 
         if database is None:
-            db_path = config.get("Tibber", "database_file", fallback=DEFAULT_DATABASE_FILE)
+            db_path = database_path(config)
             self._database = EnergyDatabase(db_path)
             self._owns_database = True
         else:

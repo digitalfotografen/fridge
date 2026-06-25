@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from fridge.enums import EnergyState
-from fridge.energy_db import EnergyDatabase, EnergyStateSlot, PriceSlot
+from fridge.energy_db import EnergyDatabase, EnergyStateSlot, Measurement, PriceSlot
 
 
 BASE = datetime(2026, 6, 23, 14, 0, tzinfo=UTC)
@@ -138,14 +138,89 @@ def test_upsert_energy_states_updates_existing(db: EnergyDatabase):
     assert result[0].energy_state == EnergyState.HIGH_PRICE
 
 
+def _measurement(when: datetime, **overrides) -> Measurement:
+    defaults = dict(
+        recorded_at=when,
+        temperature=5.0,
+        humidity=60.0,
+        mode="COOL",
+        action_state="COOLING",
+        energy_state="NORMAL_PRICE",
+        target_temperature=5.0,
+        target_humidity=55.0,
+        price=1.23,
+        price_currency="SEK",
+    )
+    defaults.update(overrides)
+    return Measurement(**defaults)
+
+
+def test_insert_and_get_measurements_round_trip(db: EnergyDatabase):
+    db.insert_measurement(_measurement(BASE, temperature=4.2, humidity=58.0))
+
+    result = db.get_measurements(BASE, BASE + timedelta(minutes=1))
+
+    assert len(result) == 1
+    row = result[0]
+    assert row.recorded_at == BASE
+    assert row.temperature == 4.2
+    assert row.humidity == 58.0
+    assert row.mode == "COOL"
+    assert row.action_state == "COOLING"
+    assert row.energy_state == "NORMAL_PRICE"
+    assert row.price == 1.23
+    assert row.price_currency == "SEK"
+
+
+def test_measurements_range_ordered_and_half_open(db: EnergyDatabase):
+    for i in range(4):
+        db.insert_measurement(_measurement(BASE + timedelta(minutes=i)))
+
+    result = db.get_measurements(BASE, BASE + timedelta(minutes=2))
+
+    assert [m.recorded_at for m in result] == [BASE, BASE + timedelta(minutes=1)]
+
+
+def test_insert_measurement_replaces_existing(db: EnergyDatabase):
+    db.insert_measurement(_measurement(BASE, temperature=4.0))
+    db.insert_measurement(_measurement(BASE, temperature=9.0))
+
+    result = db.get_measurements(BASE, BASE + timedelta(minutes=1))
+
+    assert len(result) == 1
+    assert result[0].temperature == 9.0
+
+
+def test_insert_measurement_allows_null_values(db: EnergyDatabase):
+    db.insert_measurement(
+        _measurement(
+            BASE,
+            temperature=None,
+            humidity=None,
+            target_temperature=None,
+            target_humidity=None,
+            price=None,
+            price_currency=None,
+        )
+    )
+
+    result = db.get_measurements(BASE, BASE + timedelta(minutes=1))
+
+    assert len(result) == 1
+    assert result[0].temperature is None
+    assert result[0].price is None
+    assert result[0].price_currency is None
+
+
 def test_prune_removes_old_rows(db: EnergyDatabase):
     db.upsert_prices(_slots(4))
     db.upsert_energy_states([EnergyStateSlot(BASE, EnergyState.LOW_PRICE)])
+    db.insert_measurement(_measurement(BASE))
 
     deleted = db.prune(BASE + timedelta(minutes=30))
 
-    # Two price slots + one energy state removed
-    assert deleted == 3
+    # Two price slots + one energy state + one measurement removed
+    assert deleted == 4
     remaining = db.get_prices(BASE, BASE + timedelta(hours=1))
     assert [s.starts_at for s in remaining] == [
         BASE + timedelta(minutes=30),
