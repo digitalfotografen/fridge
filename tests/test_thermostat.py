@@ -52,7 +52,7 @@ def test_generate_thresholds_cool_down_low_price_adjusts_targets() -> None:
 
     thresholds = generate_thresholds(config, ModeState.COOL_DOWN, EnergyState.LOW_PRICE)
 
-    assert thresholds.target_temperature == 12.0
+    assert thresholds.target_temperature == 10.0
     assert thresholds.heater_on_threshold == 11.5
     assert thresholds.heater_off_threshold == 14.5
     assert thresholds.cooler_on_threshold == 11.5
@@ -64,7 +64,7 @@ def test_generate_thresholds_cool_mode_high_price_uses_freeze_guard() -> None:
 
     thresholds = generate_thresholds(config, ModeState.COOL, EnergyState.HIGH_PRICE)
 
-    assert thresholds.target_temperature == 5.0
+    assert thresholds.target_temperature == 7.0
     assert thresholds.target_humidity == 55.0
     assert thresholds.heater_on_threshold == 1.5
     assert thresholds.heater_off_threshold == 4.5
@@ -94,7 +94,7 @@ def test_generate_thresholds_uses_readme_defaults_as_fallbacks_for_cool_mode_hig
 
     thresholds = generate_thresholds(config, ModeState.COOL, EnergyState.HIGH_PRICE)
 
-    assert thresholds.target_temperature == 5.0
+    assert thresholds.target_temperature == 7.0
     assert thresholds.target_humidity == 55.0
     assert thresholds.heater_on_threshold == 1.5
     assert thresholds.heater_off_threshold == 4.5

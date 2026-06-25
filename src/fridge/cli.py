@@ -10,7 +10,7 @@ import shutil
 import signal
 import threading
 from configparser import ConfigParser
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -24,6 +24,10 @@ from fridge import (
     ModeState,
     ActionState,
     EnergyState,
+    EnergyController,
+    EnergyDatabase,
+    EnergyPlanner,
+    TibberPriceFetcher,
     cache_path,
     data_path,
     i2c_scan,
@@ -147,6 +151,7 @@ def show():
         click.echo(f"Error initialising GPIO: {exc}", err=True)
         raise SystemExit(1) from exc
 
+    cfg = load_config()
     relay = RelayGpio(gpio)
     expanded_cache = os.path.expanduser(cache_path)
     cache = Cache(expanded_cache)
@@ -184,6 +189,30 @@ def show():
         if cool_down_start is not None:
             formatted = datetime.fromtimestamp(cool_down_start).strftime("%Y-%m-%d %H:%M:%S")
             click.echo(f"  Cool-down started at: {formatted}")
+
+        click.echo("")
+        click.echo("=== Energy Price ===")
+        try:
+            energy_database = EnergyDatabase(
+                cfg.get(
+                    "Tibber",
+                    "database_file",
+                    fallback="~/fridge_data/fridge_prices.db",
+                )
+            )
+            try:
+                price_slot = energy_database.get_price_at(datetime.now(tz=UTC))
+                if price_slot is None:
+                    click.echo("  Current price : N/A (no cached price for current slot)")
+                else:
+                    currency = price_slot.currency or ""
+                    click.echo(f"  Current price : {price_slot.total:.4f} {currency}".rstrip())
+                    if price_slot.level:
+                        click.echo(f"  Tibber level  : {price_slot.level}")
+            finally:
+                energy_database.close()
+        except Exception as exc:
+            click.echo(f"  Error reading price database: {exc}")
 
         click.echo("")
         click.echo("=== Sensor Readings ===")
@@ -250,7 +279,15 @@ def run():
     gpio = I2cGpio()
     thermostat = Thermostat(gpio=gpio, config=cfg)
     buttons = ButtonsGpio(gpio)
-    mqtt_bridge = MqttBridge(thermostat=thermostat, config=cfg)
+    # Shared energy database for prices + computed energy states.
+    energy_database = EnergyDatabase(
+        cfg.get("Tibber", "database_file", fallback="~/fridge_data/fridge_prices.db")
+    )
+    tibber_fetcher = TibberPriceFetcher(cfg, database=energy_database)
+    energy_planner = EnergyPlanner(cfg, database=energy_database)
+    energy_controller = EnergyController(thermostat=thermostat, planner=energy_planner)
+
+    mqtt_bridge = MqttBridge(thermostat=thermostat, config=cfg, energy_database=energy_database)
 
     try:
         # Connect blinker signals to thermostat and button LEDs
@@ -280,6 +317,8 @@ def run():
         thermostat.start()
         buttons.start_interrupt_listener()
         mqtt_bridge.start()
+        tibber_fetcher.start()
+        energy_controller.start()
 
         logger.info("Fridge controller running (press Ctrl+C to stop)")
 
@@ -297,6 +336,9 @@ def run():
     finally:
         # Graceful shutdown
         logger.info("Stopping fridge controller")
+        energy_controller.stop()
+        tibber_fetcher.stop()
+        energy_database.close()
         mqtt_bridge.stop()
         thermostat.stop()
         buttons.stop_interrupt_listener()

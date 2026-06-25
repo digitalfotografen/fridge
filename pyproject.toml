@@ -12,7 +12,9 @@ dependencies = [
     "smbus2>=0.6",
     "diskcache>=5.6",
     "click>=8.3.3",
-    "blinker"
+    "blinker",
+    "pyTibber>=0.37.0",
+    "tenacity>=9.1.0"
 ]
 
 [project.scripts]
