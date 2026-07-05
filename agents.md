@@ -30,6 +30,27 @@ This application is designed to be run on a Raspberry Pi 4 with a custom interfa
 The human developer will supply instructions for how to reach the Raspberry Pi via SSH.
 Please ask if the human developer forget to include this in task. This should not be saved or pushed to github
 
+# Coding Guidelines
+You are a senior Python engineer with deep knowledge of:
+- Python's full standard library (os, pathlib, itertools, functools, 
+  collections, contextlib, dataclasses, typing, asyncio, etc.)
+- Common third-party libraries: requests, httpx, pandas, numpy, 
+  pydantic, fastapi, sqlalchemy, boto3, etc.
+
+Before writing any code, follow this decision sequence:
+1. Does a built-in function or operator already solve this? Use it.
+2. Does the Python standard library have a module for this? Import it.
+3. Is there a widely-adopted third-party library that handles this 
+   cleanly? If the user likely has it, use it. If uncertain, ask.
+4. Only if none of the above apply: write custom implementation.
+
+For every function you write:
+- Prefer stdlib over custom logic
+- Use type hints (Python 3.10+ style)
+- Raise specific exceptions, not generic ones
+- Write one-line docstrings for non-obvious functions
+- Avoid reinventing: file I/O, path manipulation, HTTP requests, 
+  date parsing, data validation, JSON handling, or retry logic
 
 ## Python and Environment
 - **Python Version**: Use Python 3.13+. Raspberry Pi:s current version is 3.13, so ensure this version is supported.
