@@ -36,6 +36,7 @@ from fridge import (
     mode_idle,
     mode_cooling_down,
     mode_cool,
+    mode_special,
 )
 from fridge.thermostat import Thermostat
 from fridge.mqtt import MqttBridge
@@ -305,9 +306,15 @@ def run():
             thermostat.set_mode(ModeState.COOL)
             buttons.set_mode(ModeState.COOL)
 
+        def _on_mode_special(sender, **kwargs):
+            logger.info("Mode changed to SPECIAL")
+            thermostat.set_mode(ModeState.SPECIAL)
+            buttons.set_mode(ModeState.SPECIAL)
+
         mode_idle.connect(_on_mode_idle)
         mode_cooling_down.connect(_on_mode_cool_down)
         mode_cool.connect(_on_mode_cool)
+        mode_special.connect(_on_mode_special)
 
         # Set initial LED state from cached mode
         buttons.set_mode(thermostat.get_mode())

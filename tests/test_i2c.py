@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import fridge.i2c as i2c_module
 from fridge.i2c import i2c_scan, I2cGpio, RelayGpio, ButtonsGpio, Sht30
 from fridge.enums import ModeState
-from fridge.signals import mode_idle, mode_cooling_down, mode_cool
+from fridge.signals import mode_idle, mode_cooling_down, mode_cool, mode_special
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def test_relay_gpio_set_cooler_on(mock_gpio):
 
 def test_i2c_gpio_enables_interrupt_for_button_bits(mocker):
     """
-    I2cGpio should enable port A interrupts for button bits 4-6 only.
+    I2cGpio should enable port A interrupts for button bits 4-7 only.
     """
     write_mock = mocker.patch.object(I2cGpio, "_write_byte_register")
 
@@ -71,7 +71,7 @@ def test_i2c_gpio_enables_interrupt_for_button_bits(mocker):
     write_mock.assert_any_call(i2c_module.MCP23017_IOCON, 0x04)
     write_mock.assert_any_call(i2c_module.MCP23017_IODIRA, 0xFF)
     write_mock.assert_any_call(i2c_module.MCP23017_INTCONA, 0x00)
-    write_mock.assert_any_call(i2c_module.MCP23017_GPINTENA, 0x70)
+    write_mock.assert_any_call(i2c_module.MCP23017_GPINTENA, 0xF0)
     write_mock.assert_any_call(i2c_module.MCP23017_DEFVALA, 0x00)
     write_mock.assert_any_call(i2c_module.MCP23017_IODIRB, 0x00)
 
@@ -253,6 +253,27 @@ def test_buttons_gpio_handle_cool_button_sets_only_cool_led(mock_gpio):
     receiver.assert_called_once_with(buttons)
 
 
+def test_buttons_gpio_handle_special_button_sets_only_special_led(mock_gpio):
+    """
+    Special button should set only special LED active and emit special mode signal.
+    """
+    mock_gpio.read.side_effect = [
+        0x7F,
+        0x17,
+    ]  # Port A special pressed (bit 7 low), Port B off LED on
+    buttons = ButtonsGpio(mock_gpio)
+    receiver = MagicMock()
+    mode_special.connect(receiver)
+
+    try:
+        assert buttons.handle_button_press() is True
+    finally:
+        mode_special.disconnect(receiver)
+
+    mock_gpio.write.assert_called_once_with("B", 0x87)
+    receiver.assert_called_once_with(buttons)
+
+
 def test_buttons_gpio_handle_button_press_returns_false_when_no_button_pressed(mock_gpio):
     """
     No button press should not update LEDs and should not emit a signal.
@@ -277,6 +298,7 @@ def test_buttons_gpio_handle_button_press_returns_false_when_no_button_pressed(m
         (ModeState.IDLE, 0x27, 0x17),
         (ModeState.COOL_DOWN, 0x17, 0x27),
         (ModeState.COOL, 0x07, 0x47),
+        (ModeState.SPECIAL, 0x17, 0x87),
     ],
 )
 def test_buttons_gpio_set_mode_updates_leds_for_mode(

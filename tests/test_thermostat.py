@@ -104,6 +104,82 @@ def test_generate_thresholds_uses_readme_defaults_as_fallbacks_for_cool_mode_hig
     assert thresholds.fan_off_threshold == 50.0
 
 
+def test_generate_thresholds_special_mode_normal_price() -> None:
+    config = _load_default_config()
+
+    thresholds = generate_thresholds(config, ModeState.SPECIAL, EnergyState.NORMAL_PRICE)
+
+    assert thresholds.target_temperature == 5.0
+    assert thresholds.target_humidity == 55.0
+    assert thresholds.heater_on_threshold == 3.5
+    assert thresholds.heater_off_threshold == 6.5
+    assert thresholds.cooler_on_threshold == 6.5
+    assert thresholds.cooler_off_threshold == 3.5
+    assert thresholds.fan_on_threshold == 60.0
+    assert thresholds.fan_off_threshold == 50.0
+
+
+def test_generate_thresholds_special_mode_reads_from_special_section() -> None:
+    """SPECIAL mode must read its own [SpecialMode] section, independent of [CoolMode]."""
+    config = ConfigParser()
+    config.read_string(
+        """
+        [CoolMode]
+        target_temperature = 5.0
+        hysteresis = 1.5
+        freeze_guard = 0.0
+        target_humidity = 55.0
+        humidity_hysteresis = 5.0
+
+        [SpecialMode]
+        target_temperature = 2.0
+        hysteresis = 0.5
+        freeze_guard = 0.0
+        target_humidity = 70.0
+        humidity_hysteresis = 3.0
+        """
+    )
+
+    thresholds = generate_thresholds(config, ModeState.SPECIAL, EnergyState.NORMAL_PRICE)
+
+    assert thresholds.target_temperature == 2.0
+    assert thresholds.target_humidity == 70.0
+    assert thresholds.heater_on_threshold == 1.5
+    assert thresholds.heater_off_threshold == 2.5
+    assert thresholds.cooler_on_threshold == 2.5
+    assert thresholds.cooler_off_threshold == 1.5
+    assert thresholds.fan_on_threshold == 73.0
+    assert thresholds.fan_off_threshold == 67.0
+
+
+def test_generate_thresholds_special_mode_high_price_uses_freeze_guard() -> None:
+    config = _load_default_config()
+
+    thresholds = generate_thresholds(config, ModeState.SPECIAL, EnergyState.HIGH_PRICE)
+
+    assert thresholds.target_temperature == 7.0
+    assert thresholds.target_humidity == 55.0
+    assert thresholds.heater_on_threshold == 1.5
+    assert thresholds.heater_off_threshold == 4.5
+    assert thresholds.cooler_on_threshold == 8.5
+    assert thresholds.cooler_off_threshold == 5.5
+
+
+def test_generate_thresholds_uses_defaults_as_fallbacks_for_special_mode() -> None:
+    config = ConfigParser()
+
+    thresholds = generate_thresholds(config, ModeState.SPECIAL, EnergyState.NORMAL_PRICE)
+
+    assert thresholds.target_temperature == 5.0
+    assert thresholds.target_humidity == 55.0
+    assert thresholds.heater_on_threshold == 3.5
+    assert thresholds.heater_off_threshold == 6.5
+    assert thresholds.cooler_on_threshold == 6.5
+    assert thresholds.cooler_off_threshold == 3.5
+    assert thresholds.fan_on_threshold == 60.0
+    assert thresholds.fan_off_threshold == 50.0
+
+
 class _FakeSensor:
     def __init__(self, readings: list[tuple[float, float]]) -> None:
         self._readings = readings

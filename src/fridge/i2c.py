@@ -3,7 +3,7 @@ import threading
 from smbus2 import SMBus
 import time
 from fridge.enums import ModeState
-from fridge.signals import mode_idle, mode_cooling_down, mode_cool
+from fridge.signals import mode_idle, mode_cooling_down, mode_cool, mode_special
 
 try:
     from gpiozero import Button as GpioZeroButton
@@ -271,7 +271,7 @@ class I2cGpio:
     GPB0-7 is used as outputs.
     """
 
-    _BUTTON_INTERRUPT_MASK = (1 << 4) | (1 << 5) | (1 << 6)
+    _BUTTON_INTERRUPT_MASK = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7)
 
     def __init__(self, addr: int = MCP23017_ADDRESS, interrupt_gpio: int | None = None):
         """
@@ -455,11 +455,16 @@ class ButtonsGpio:
     Bit 4: Off button
     Bit 5: Cool down button
     Bit 6: Cool button
+    Bit 7: Special button
 
     Port B inputs:
     Bit 0: Cooler relay
     Bit 1: Heater relay
     Bit 2: Vent fan relay
+    Bit 4: Off LED
+    Bit 5: Cool down LED
+    Bit 6: Cool LED
+    Bit 7: Special LED
 
     Note: The GPIO is used for other purposes, don't change other pins
     """
@@ -475,13 +480,25 @@ class ButtonsGpio:
     _OFF_BUTTON_BIT = 4
     _COOL_DOWN_BUTTON_BIT = 5
     _COOL_BUTTON_BIT = 6
+    _SPECIAL_BUTTON_BIT = 7
 
     _OFF_LED_BIT = 4
     _COOL_DOWN_LED_BIT = 5
     _COOL_LED_BIT = 6
+    _SPECIAL_LED_BIT = 7
 
-    _BUTTON_MASK = (1 << _OFF_BUTTON_BIT) | (1 << _COOL_DOWN_BUTTON_BIT) | (1 << _COOL_BUTTON_BIT)
-    _LED_MASK = (1 << _OFF_LED_BIT) | (1 << _COOL_DOWN_LED_BIT) | (1 << _COOL_LED_BIT)
+    _BUTTON_MASK = (
+        (1 << _OFF_BUTTON_BIT)
+        | (1 << _COOL_DOWN_BUTTON_BIT)
+        | (1 << _COOL_BUTTON_BIT)
+        | (1 << _SPECIAL_BUTTON_BIT)
+    )
+    _LED_MASK = (
+        (1 << _OFF_LED_BIT)
+        | (1 << _COOL_DOWN_LED_BIT)
+        | (1 << _COOL_LED_BIT)
+        | (1 << _SPECIAL_LED_BIT)
+    )
 
     def handle_button_press(self, input_state: int | None = None) -> bool:
         """
@@ -512,6 +529,11 @@ class ButtonsGpio:
             mode_cool.send(self)
             return True
 
+        if not (input_state & (1 << self._SPECIAL_BUTTON_BIT)):
+            self._set_active_led(self._SPECIAL_LED_BIT)
+            mode_special.send(self)
+            return True
+
         return False
 
     def _set_active_led(self, led_bit: int) -> None:
@@ -537,6 +559,7 @@ class ButtonsGpio:
             ModeState.IDLE: self._OFF_LED_BIT,
             ModeState.COOL_DOWN: self._COOL_DOWN_LED_BIT,
             ModeState.COOL: self._COOL_LED_BIT,
+            ModeState.SPECIAL: self._SPECIAL_LED_BIT,
         }
 
         led_bit = led_bits_by_mode.get(mode)

@@ -19,8 +19,8 @@ The application remembers the state of the system,
 and is used to restore the state when the application is restarted after a power loss.
 
 ## Modes
-The application has three modes: Idle (default), Cooling Down and Cool that are described below.
-There are three buttons that can be used to switch between these modes.
+The application has four modes: Idle (default), Cooling Down, Cool and Special that are described below.
+There are four buttons that can be used to switch between these modes.
 
 There is a hysteresis of ±1.5°C on the cooler and heater, to prevent it from switching on and off too often.
 
@@ -44,6 +44,17 @@ The temperature is controlled to be between 2 and 8 degrees Celsius, with a targ
 The cooler is used to regulate the temperature when it is too hot.
 The heater is used to as a freeze guard to prevent the temperature to drop below 0°C.
 The fan should be active if humidity is above 55%, and switched off if below ths (with a hysteresis of ±5%)
+
+### Special mode
+The fridge is set in Special mode when the special button is pressed.
+This mode behaves like Cool mode but reads its own target temperature, hysteresis,
+freeze guard and humidity thresholds from the `[SpecialMode]` section of the config
+file. It is intended as a user-configurable slot for a different set-point (for example
+longer tenderising at a slightly higher temperature, or a lower serving temperature
+for drinks) without disturbing the calibrated `[CoolMode]` values.
+
+The defaults in `[SpecialMode]` mirror `[CoolMode]` (target 5°C, hysteresis ±1.5°C,
+target humidity 55% ±5%, freeze guard 0°C); adjust them in `fridge.ini` to suit.
 
 ## Energy cost saving
 The system can be configured to avoid running the heater and cooler during high-price hours.
@@ -75,7 +86,7 @@ Bit 3: Not used
 Bit 4: Off button
 Bit 5: Cool down button
 Bit 6: Cool button
-Bit 7: Reserved
+Bit 7: Special button
 
 Port B is used for outputs (LEDs and relays). All outputs pins are connected to a ULN2803A driver.
 Both relays and LED:s are active low (open collector) and are grounded when the GPIO pin goes high.
@@ -86,7 +97,7 @@ Bit 3: Reserved
 Bit 4: Off LED
 Bit 5: Cool down LED
 Bit 6: Cool LED
-Bit 7: Reserved
+Bit 7: Special LED
 
 The button handler uses radio-button behavior for mode LEDs: when a mode button is pressed,
 its corresponding LED is set and the other mode LEDs are cleared while relay bits remain unchanged.
@@ -140,6 +151,7 @@ The ModeState engine is used to switch between the three modes. The modes are de
 - **IDLE**: The system is in idle mode, heater and cooler are turned off.
 - **COOL_DOWN**: The system is cooling down.
 - **COOL**: The system is keep at a constant low temperature.
+- **SPECIAL**: Like COOL, but with its own configurable target temperature and humidity.
 
 ### ActionState
 This is used for the actual temperature regulation.
@@ -207,6 +219,8 @@ The thermostat uses a helper function to generate mode-specific thresholds from 
   and fan thresholds are fixed to `1%` (on) / `0%` (off) to keep the fan running continuously.
 - In **COOL**, heater and cooler thresholds are also derived from target and hysteresis with energy adjustments,
   while heater thresholds are clamped by `freeze_guard`.
+- In **SPECIAL**, thresholds are derived exactly like in **COOL** but read from the `[SpecialMode]`
+  config section, allowing an independent user-configurable set-point.
 - For all values used by the helper, missing config entries fall back to the default values listed in this README.
 
 ## Configuration
@@ -268,7 +282,7 @@ the configuration (default `fridge/`).
 | Topic                          | Payload                              | Retain | When                                  |
 |--------------------------------|--------------------------------------|--------|---------------------------------------|
 | `state/online`                 | `online` / `offline` (LWT)           | yes    | On connect / disconnect               |
-| `state/mode`                   | `IDLE` / `COOL_DOWN` / `COOL`        | yes    | On connect and whenever it changes    |
+| `state/mode`                   | `IDLE` / `COOL_DOWN` / `COOL` / `SPECIAL` | yes | On connect and whenever it changes    |
 | `state/action`                 | `IDLE` / `COOLING` / `HEATING`       | yes    | On connect and whenever it changes    |
 | `state/energy`                 | `LOW_PRICE` / `NORMAL_PRICE` / `HIGH_PRICE` | yes | On connect and whenever it changes |
 | `status`                       | JSON snapshot (see below)            | yes    | Every `update_interval` seconds       |
@@ -300,7 +314,7 @@ is available for the current slot (e.g. before the first successful fetch).
 
 | Topic         | Accepted payloads                | Effect                                              |
 |---------------|----------------------------------|-----------------------------------------------------|
-| `cmd/mode`    | `IDLE`, `COOL_DOWN`, `COOL`      | Same as pressing the corresponding physical button. |
+| `cmd/mode`    | `IDLE`, `COOL_DOWN`, `COOL`, `SPECIAL` | Same as pressing the corresponding physical button. |
 
 Mode commands received over MQTT are routed through the same internal signals
 as the buttons, so the front-panel mode LEDs are updated together with the
@@ -351,6 +365,7 @@ target temperatures, hysteresis, refresh rate, and energy price adjustments.
 | `Hardware`     | I2C addresses for sensors and GPIO, interrupt GPIO pin     |
 | `CoolDownMode` | Target temperature, hysteresis and auto-switch duration    |
 | `CoolMode`     | Target temperature, hysteresis, freeze guard and humidity  |
+| `SpecialMode`  | Independent target/hysteresis/humidity for the Special mode|
 | `Energy`       | Temperature adjustments for low and high energy prices     |
 | `Logging`      | Log file, shared database file and measurement interval    |
 | `MQTT`         | MQTT broker settings, topic prefix and publish interval   |

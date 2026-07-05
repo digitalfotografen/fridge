@@ -5,7 +5,8 @@ def test_mode_state_enum():
     assert ModeState.IDLE == 0
     assert ModeState.COOL_DOWN == 1
     assert ModeState.COOL == 2
-    assert len(ModeState) == 3
+    assert ModeState.SPECIAL == 3
+    assert len(ModeState) == 4
 
 
 def test_action_state_enum():

@@ -24,6 +24,8 @@ DEFAULT_COOL_DOWN_TARGET_TEMPERATURE = 12.0
 DEFAULT_COOL_DOWN_HYSTERESIS = 1.5
 DEFAULT_COOL_TARGET_TEMPERATURE = 5.0
 DEFAULT_COOL_HYSTERESIS = 1.5
+DEFAULT_SPECIAL_TARGET_TEMPERATURE = 5.0
+DEFAULT_SPECIAL_HYSTERESIS = 1.5
 DEFAULT_FREEZE_GUARD = 0.0
 DEFAULT_TARGET_HUMIDITY = 55.0
 DEFAULT_HUMIDITY_HYSTERESIS = 5.0
@@ -151,6 +153,47 @@ def generate_thresholds(
             )
             humidity_hysteresis = config.getfloat(
                 "CoolMode",
+                "humidity_hysteresis",
+                fallback=DEFAULT_HUMIDITY_HYSTERESIS,
+            )
+
+            heater_target = target_temperature + heat_adjustment
+            cooler_target = target_temperature + cool_adjustment
+
+            return ThermostatThresholds(
+                target_temperature=cooler_target,
+                target_humidity=target_humidity,
+                heater_on_threshold=max(freeze_guard, heater_target - hysteresis),
+                heater_off_threshold=max(freeze_guard, heater_target + hysteresis),
+                cooler_on_threshold=cooler_target + hysteresis,
+                cooler_off_threshold=cooler_target - hysteresis,
+                fan_on_threshold=target_humidity + humidity_hysteresis,
+                fan_off_threshold=target_humidity - humidity_hysteresis,
+            )
+
+        case ModeState.SPECIAL:
+            target_temperature = config.getfloat(
+                "SpecialMode",
+                "target_temperature",
+                fallback=DEFAULT_SPECIAL_TARGET_TEMPERATURE,
+            )
+            hysteresis = config.getfloat(
+                "SpecialMode",
+                "hysteresis",
+                fallback=DEFAULT_SPECIAL_HYSTERESIS,
+            )
+            freeze_guard = config.getfloat(
+                "SpecialMode",
+                "freeze_guard",
+                fallback=DEFAULT_FREEZE_GUARD,
+            )
+            target_humidity = config.getfloat(
+                "SpecialMode",
+                "target_humidity",
+                fallback=DEFAULT_TARGET_HUMIDITY,
+            )
+            humidity_hysteresis = config.getfloat(
+                "SpecialMode",
                 "humidity_hysteresis",
                 fallback=DEFAULT_HUMIDITY_HYSTERESIS,
             )
@@ -417,7 +460,7 @@ class Thermostat:
                     self.relay.set_vent_fan_relay(False)
                     self._record_relay_switch("fan")
 
-            case ModeState.COOL:
+            case ModeState.COOL | ModeState.SPECIAL:
                 if self.thresholds.fan_on_threshold is None:
                     return
                 if self._humidity > self.thresholds.fan_on_threshold:
@@ -492,7 +535,7 @@ class Thermostat:
                 case ModeState.IDLE:
                     self._set_action_state(ActionState.IDLE)
 
-                case ModeState.COOL_DOWN | ModeState.COOL:
+                case ModeState.COOL_DOWN | ModeState.COOL | ModeState.SPECIAL:
                     next_action = self._action_state
 
                     if (
