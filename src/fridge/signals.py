@@ -8,6 +8,7 @@ _signals = Namespace()
 mode_idle = _signals.signal("mode_idle")
 mode_cooling_down = _signals.signal("mode_cooling_down")
 mode_cool = _signals.signal("mode_cool")
+mode_special = _signals.signal("mode_special")
 
 
 # State change signals issued by the thermostat

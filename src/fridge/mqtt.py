@@ -47,6 +47,7 @@ from fridge.signals import (
     mode_cool,
     mode_cooling_down,
     mode_idle,
+    mode_special,
     mode_state_changed,
 )
 
@@ -69,6 +70,7 @@ _MODE_SIGNAL = {
     ModeState.IDLE: mode_idle,
     ModeState.COOL_DOWN: mode_cooling_down,
     ModeState.COOL: mode_cool,
+    ModeState.SPECIAL: mode_special,
 }
 
 

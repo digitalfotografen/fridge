@@ -9,6 +9,7 @@ class ModeState(IntEnum):
     IDLE = 0
     COOL_DOWN = 1
     COOL = 2
+    SPECIAL = 3
 
 
 class ActionState(IntEnum):

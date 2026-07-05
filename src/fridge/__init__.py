@@ -26,6 +26,7 @@ from .measurement_logger import MeasurementLogger as MeasurementLogger
 from .signals import mode_idle as mode_idle
 from .signals import mode_cooling_down as mode_cooling_down
 from .signals import mode_cool as mode_cool
+from .signals import mode_special as mode_special
 from .signals import cooler_started as cooler_started
 from .signals import cooler_stopped as cooler_stopped
 from .signals import heater_started as heater_started
