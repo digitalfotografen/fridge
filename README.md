@@ -23,6 +23,8 @@ The application has four modes: Idle (default), Cooling Down, Cool and Special t
 There are four buttons that can be used to switch between these modes.
 
 There is a hysteresis of ±1.5°C on the cooler and heater, to prevent it from switching on and off too often.
+The refrigeration compressor also runs on a duty cycle (see *Cooler duty cycle* below) to prevent the
+heat exchanger from freezing up and blocking the air flow.
 
 ### Idle mode
 The fridge is in Idle mode when the off button is pressed.
@@ -30,20 +32,22 @@ Temperature and humidity is monitored, but heater, fan and cooler are switched o
 
 ### Cooling down mode
 The fridge is set in Cool Down mode when the Cool Down button is pressed.
-The temperature is controlled to be between 8 and 15 degrees Celsius, with a target of 12 degrees Celsius.
-The temperature is controlled to be between 10 and 14 degrees Celsius with the cooler.
-The heater is switched on if the temperature is below 8 degrees Celsius 
-and switched off if the temperature is above 9 degrees Celsius.
-The fan is switched on, and the running continuously in this mode.
+The temperature is controlled to be between 10 and 14 degrees Celsius with the cooler, with a target of 12 degrees Celsius.
+The heater acts as a freeze guard: it is switched on if the temperature drops below `freeze_guard` (default 9°C)
+and switched off when the temperature rises above `freeze_guard + hysteresis`.
+The vent fan (humidity control) follows the same humidity logic as in Cool mode.
 The system should automatically switch to Cool mode after 10 hours of Cooling Down mode.
 
 ### Cool mode
 The fridge is set in Cool mode when the cool button is pressed.
 This mode is used to let the meat tender before cutting it, or to keep a massive amount of beer cold.
-The temperature is controlled to be between 2 and 8 degrees Celsius, with a target of 5 degrees Celsius.
-The cooler is used to regulate the temperature when it is too hot.
-The heater is used to as a freeze guard to prevent the temperature to drop below 0°C.
-The fan should be active if humidity is above 55%, and switched off if below ths (with a hysteresis of ±5%)
+The temperature is controlled around a target of 5 degrees Celsius (±`hysteresis`/2, default 1.5°C).
+The cooler is used to regulate the temperature when it is too hot (see *Cooler duty cycle* below).
+The heater acts purely as a freeze guard: it is switched on when the temperature drops below `freeze_guard`
+(default 2°C) and switched off when it rises above `freeze_guard + hysteresis`.
+The vent fan is used to control humidity and is active if humidity is above 55% (with a hysteresis of ±5%).
+Note: the vent fan is separate from the circulation fan inside the cooler unit — the circulation fan
+is energised automatically by the *Cooler relay* (Port B Bit 0).
 
 ### Special mode
 The fridge is set in Special mode when the special button is pressed.
@@ -90,10 +94,10 @@ Bit 7: Special button
 
 Port B is used for outputs (LEDs and relays). All outputs pins are connected to a ULN2803A driver.
 Both relays and LED:s are active low (open collector) and are grounded when the GPIO pin goes high.
-Bit 0: Cooler relay
+Bit 0: Cooler relay (mains switch for the cooler unit — enables both the circulation fan and the refrigeration compressor)
 Bit 1: Heater relay
-Bit 2: Vent fan relay
-Bit 3: Reserved
+Bit 2: Vent fan relay (humidity control, not the circulation fan)
+Bit 3: Compressor pause relay (pauses the refrigeration compressor while the circulation fan keeps running)
 Bit 4: Off LED
 Bit 5: Cool down LED
 Bit 6: Cool LED
@@ -105,9 +109,11 @@ The same LED behavior can also be applied programmatically via `ButtonsGpio.set_
 when mode changes are triggered by other parts of the application.
 Button events are handled via MCP23017 port A interrupts routed through INTA on Raspberry Pi GPIO 27 for fast response.
 
-The devices that the relays control are slow and should not be switched too often
-to avoid damage to the relays or the device.
-The maximum switching frequency is one event per five-minute period.
+The devices that the relays control are slow and should not be switched too often to avoid damage.
+The cooler and compressor-pause relays are driven by the *Cooler duty cycle* state machine (see below),
+which enforces the required minimum on/off/pause times. The vent fan (humidity control) is rate-limited
+separately: it may not switch on or off more often than once per `min_vent_fan` interval (default 5 minutes).
+The heater is not additionally rate-limited beyond its own hysteresis band.
 
 # Software implementation
 The software is written in Python. It is a CLI application implemented using the Click library.
@@ -156,29 +162,61 @@ The ModeState engine is used to switch between the three modes. The modes are de
 ### ActionState
 This is used for the actual temperature regulation.
 The ActionState engine is used to switch between the three actions based on target temperature and current temperature.
-The target temperature is defined in the configuration file but can be nudged by the EnergyState engine.
+The target temperature and `freeze_guard` are defined in the configuration file but can be nudged by the EnergyState engine.
 The hysteresis is defined in the configuration file.
-- **COOLING**: The cooler is running.
-The state is switched to IDLE if the temperature is below the target temperature minus the hysteresis.
-- **IDLE**: Heater and cooler are turned off.
-The state is switched to COOLING if the temperature is above the target temperature plus the hysteresis.
-The state is switched to HEATING if the temperature is below the target temperature minus the hysteresis.
-- **HEATING**: The heater is running.
-The state is switched to IDLE if the temperature is above the target temperature plus hysteresis.
 
-The thermostat only applies heater/cooler relay changes when the `ActionState` changes.
-This reduces unnecessary relay writes while still relying on hysteresis for stable control.
+- **COOLING**: The cooler duty cycle is active (see below).
+  Switched on when the temperature is above `target_temperature + hysteresis / 2`.
+  Switched off when the temperature drops below `target_temperature - hysteresis / 2`.
+- **IDLE**: Neither the cooler duty cycle nor the heater is active.
+- **HEATING**: The heater is running.
+  Switched on when the temperature drops below `freeze_guard`.
+  Switched off when the temperature rises above `freeze_guard + hysteresis`.
+
+Heating and cooling are controlled independently: the heater only reacts to `freeze_guard`, not to the
+cooling target, so it can never be triggered by the cooler spinning down or by a duty-cycle pause.
 In **IDLE mode**, thermostat thresholds are not used for control decisions and all relays are forced off.
+
+#### Cooler duty cycle
+To prevent the heat exchanger from freezing up, the refrigeration compressor may only run for a limited
+time and must then pause with the circulation fan still running. The behaviour is driven by three global
+settings in `[General]` (all in minutes):
+
+| Key                      | Default | Meaning                                                                          |
+|--------------------------|---------|----------------------------------------------------------------------------------|
+| `max_cooler_time`        | `30`    | Maximum continuous compressor run time before a forced pause.                    |
+| `cooler_pause_time`      | `15`    | Duration of the forced pause (circulation fan keeps running).                    |
+| `cooler_soft_start_time` | `2`     | Time the compressor stays paused after the cooler unit is energised (soft start).|
+
+*Switching the cooler on* (temperature rises above `target_temperature + hysteresis / 2`):
+1. Port B Bit 3 HIGH (compressor paused).
+2. Port B Bit 0 HIGH (cooler unit energised — circulation fan starts).
+3. Wait `cooler_soft_start_time` minutes.
+4. Port B Bit 3 LOW (compressor starts).
+
+*While cooling* (temperature still above off-threshold):
+- After the compressor has run for `max_cooler_time` minutes, Port B Bit 3 goes HIGH (compressor paused,
+  Bit 0 stays HIGH so the circulation fan keeps running).
+- After `cooler_pause_time` minutes, Port B Bit 3 goes LOW again and the compressor resumes.
+- This cycle repeats until the temperature reaches the off-threshold.
+
+*Switching the cooler off* (temperature drops below `target_temperature - hysteresis / 2`):
+1. Port B Bit 3 HIGH (compressor paused).
+2. Wait `cooler_pause_time` minutes (circulation fan keeps running to defrost the exchanger).
+3. Port B Bit 0 LOW (cooler unit off). Port B Bit 3 stays HIGH.
+
+If the off-threshold is reached while the compressor is already in a duty-cycle pause, the remaining
+pause time is reused — no additional pause is inserted before Port B Bit 0 goes LOW.
 
 ### EnergyState
 The system can be configured to avoid running the heater and cooler during high-price hours.
 The EnergyState engine is used to switch between the three energy saving states.
 The active state is picked from a cached plan once per **15-minute slot**.
-- **LOW_PRICE**: The target temperature is lowered by 2 degrees Celsius when cooling is needed,
-and raised by 1 degrees Celsius when heating is needed.
-- **NORMAL_PRICE**: The target temperature is kept at the same value.
-- **HIGH_PRICE**: The target temperature is raised by 2 degrees Celsius when cooling is needed,
-and lowered by 2 degrees Celsius when heating is needed.
+- **LOW_PRICE**: `target_temperature` is lowered by `low_price_cool_adj` (default −2°C) and `freeze_guard`
+  is raised by `low_price_heat_adj` (default +1°C).
+- **NORMAL_PRICE**: `target_temperature` and `freeze_guard` are kept at their configured values.
+- **HIGH_PRICE**: `target_temperature` is raised by `high_price_cool_adj` (default +2°C) and `freeze_guard`
+  is lowered by `high_price_heat_adj` (default −2°C).
 
 #### Price source and planner
 Prices are fetched from the Tibber API in 15-minute slots and stored in the shared local
@@ -217,8 +255,9 @@ The thermostat uses a helper function to generate mode-specific thresholds from 
 - In **IDLE**, all thresholds are inactive (`None`) and should be handled as a special case in the regulation loop.
 - In **COOL_DOWN**, heater and cooler thresholds are derived generically from configured target temperature and hysteresis,
   and fan thresholds are fixed to `1%` (on) / `0%` (off) to keep the fan running continuously.
-- In **COOL**, heater and cooler thresholds are also derived from target and hysteresis with energy adjustments,
-  while heater thresholds are clamped by `freeze_guard`.
+- In **COOL**, cooler thresholds are derived from target and hysteresis (with the LOW/HIGH price adjustment
+  applied to `target_temperature`), and heater thresholds are derived purely from `freeze_guard` and hysteresis
+  (with the LOW/HIGH price adjustment applied to `freeze_guard`).
 - In **SPECIAL**, thresholds are derived exactly like in **COOL** but read from the `[SpecialMode]`
   config section, allowing an independent user-configurable set-point.
 - For all values used by the helper, missing config entries fall back to the default values listed in this README.
@@ -361,7 +400,7 @@ target temperatures, hysteresis, refresh rate, and energy price adjustments.
 ### Configuration sections
 | Section        | Description                                               |
 |----------------|-----------------------------------------------------------|
-| `General`      | Refresh rate and minimum relay switching interval          |
+| `General`      | Refresh rate, vent-fan rate limit, cooler duty-cycle times |
 | `Hardware`     | I2C addresses for sensors and GPIO, interrupt GPIO pin     |
 | `CoolDownMode` | Target temperature, hysteresis and auto-switch duration    |
 | `CoolMode`     | Target temperature, hysteresis, freeze guard and humidity  |
@@ -484,7 +523,7 @@ uv run fridge export --output fridge.parquet --format parquet \
 ### `test` — Hardware test sequence
 Runs a predefined sequence of hardware checks to verify that all components
 (sensor, LEDs, relays) are functioning correctly during installation.
-This command overrides the one-event-per-five-minutes relay rate limit.
+This command overrides the normal vent-fan rate limit and the cooler duty-cycle timings.
 
 ```bash
 uv run fridge test

@@ -39,10 +39,12 @@ def test_generate_thresholds_cool_down_normal_price() -> None:
 
     assert thresholds.target_temperature == 12.0
     assert thresholds.target_humidity is None
-    assert thresholds.heater_on_threshold == 10.5
-    assert thresholds.heater_off_threshold == 13.5
-    assert thresholds.cooler_on_threshold == 13.5
-    assert thresholds.cooler_off_threshold == 10.5
+    # Heater uses freeze_guard (9.0) and hysteresis (1.5)
+    assert thresholds.heater_on_threshold == 9.0
+    assert thresholds.heater_off_threshold == 10.5
+    # Cooler uses target +/- hysteresis/2
+    assert thresholds.cooler_on_threshold == 12.75
+    assert thresholds.cooler_off_threshold == 11.25
     assert thresholds.fan_on_threshold == 1.0
     assert thresholds.fan_off_threshold == 0.0
 
@@ -52,11 +54,12 @@ def test_generate_thresholds_cool_down_low_price_adjusts_targets() -> None:
 
     thresholds = generate_thresholds(config, ModeState.COOL_DOWN, EnergyState.LOW_PRICE)
 
+    # target lowered by 2, freeze_guard raised by 1
     assert thresholds.target_temperature == 10.0
-    assert thresholds.heater_on_threshold == 11.5
-    assert thresholds.heater_off_threshold == 14.5
-    assert thresholds.cooler_on_threshold == 11.5
-    assert thresholds.cooler_off_threshold == 8.5
+    assert thresholds.heater_on_threshold == 10.0
+    assert thresholds.heater_off_threshold == 11.5
+    assert thresholds.cooler_on_threshold == 10.75
+    assert thresholds.cooler_off_threshold == 9.25
 
 
 def test_generate_thresholds_cool_mode_high_price_uses_freeze_guard() -> None:
@@ -64,12 +67,13 @@ def test_generate_thresholds_cool_mode_high_price_uses_freeze_guard() -> None:
 
     thresholds = generate_thresholds(config, ModeState.COOL, EnergyState.HIGH_PRICE)
 
+    # target 5 + 2, freeze_guard 2 - 2
     assert thresholds.target_temperature == 7.0
     assert thresholds.target_humidity == 55.0
-    assert thresholds.heater_on_threshold == 1.5
-    assert thresholds.heater_off_threshold == 4.5
-    assert thresholds.cooler_on_threshold == 8.5
-    assert thresholds.cooler_off_threshold == 5.5
+    assert thresholds.heater_on_threshold == 0.0
+    assert thresholds.heater_off_threshold == 1.5
+    assert thresholds.cooler_on_threshold == 7.75
+    assert thresholds.cooler_off_threshold == 6.25
     assert thresholds.fan_on_threshold == 60.0
     assert thresholds.fan_off_threshold == 50.0
 
@@ -81,10 +85,10 @@ def test_generate_thresholds_uses_readme_defaults_as_fallbacks_for_cool_down() -
 
     assert thresholds.target_temperature == 12.0
     assert thresholds.target_humidity is None
-    assert thresholds.heater_on_threshold == 10.5
-    assert thresholds.heater_off_threshold == 13.5
-    assert thresholds.cooler_on_threshold == 13.5
-    assert thresholds.cooler_off_threshold == 10.5
+    assert thresholds.heater_on_threshold == 9.0
+    assert thresholds.heater_off_threshold == 10.5
+    assert thresholds.cooler_on_threshold == 12.75
+    assert thresholds.cooler_off_threshold == 11.25
     assert thresholds.fan_on_threshold == 1.0
     assert thresholds.fan_off_threshold == 0.0
 
@@ -96,10 +100,10 @@ def test_generate_thresholds_uses_readme_defaults_as_fallbacks_for_cool_mode_hig
 
     assert thresholds.target_temperature == 7.0
     assert thresholds.target_humidity == 55.0
-    assert thresholds.heater_on_threshold == 1.5
-    assert thresholds.heater_off_threshold == 4.5
-    assert thresholds.cooler_on_threshold == 8.5
-    assert thresholds.cooler_off_threshold == 5.5
+    assert thresholds.heater_on_threshold == 0.0
+    assert thresholds.heater_off_threshold == 1.5
+    assert thresholds.cooler_on_threshold == 7.75
+    assert thresholds.cooler_off_threshold == 6.25
     assert thresholds.fan_on_threshold == 60.0
     assert thresholds.fan_off_threshold == 50.0
 
@@ -107,14 +111,15 @@ def test_generate_thresholds_uses_readme_defaults_as_fallbacks_for_cool_mode_hig
 def test_generate_thresholds_special_mode_normal_price() -> None:
     config = _load_default_config()
 
+    # config_default.ini SpecialMode: target 14.0, hysteresis 1.5, freeze_guard 2.0
     thresholds = generate_thresholds(config, ModeState.SPECIAL, EnergyState.NORMAL_PRICE)
 
-    assert thresholds.target_temperature == 5.0
+    assert thresholds.target_temperature == 14.0
     assert thresholds.target_humidity == 55.0
-    assert thresholds.heater_on_threshold == 3.5
-    assert thresholds.heater_off_threshold == 6.5
-    assert thresholds.cooler_on_threshold == 6.5
-    assert thresholds.cooler_off_threshold == 3.5
+    assert thresholds.heater_on_threshold == 2.0
+    assert thresholds.heater_off_threshold == 3.5
+    assert thresholds.cooler_on_threshold == 14.75
+    assert thresholds.cooler_off_threshold == 13.25
     assert thresholds.fan_on_threshold == 60.0
     assert thresholds.fan_off_threshold == 50.0
 
@@ -144,10 +149,10 @@ def test_generate_thresholds_special_mode_reads_from_special_section() -> None:
 
     assert thresholds.target_temperature == 2.0
     assert thresholds.target_humidity == 70.0
-    assert thresholds.heater_on_threshold == 1.5
-    assert thresholds.heater_off_threshold == 2.5
-    assert thresholds.cooler_on_threshold == 2.5
-    assert thresholds.cooler_off_threshold == 1.5
+    assert thresholds.heater_on_threshold == 0.0
+    assert thresholds.heater_off_threshold == 0.5
+    assert thresholds.cooler_on_threshold == 2.25
+    assert thresholds.cooler_off_threshold == 1.75
     assert thresholds.fan_on_threshold == 73.0
     assert thresholds.fan_off_threshold == 67.0
 
@@ -157,25 +162,27 @@ def test_generate_thresholds_special_mode_high_price_uses_freeze_guard() -> None
 
     thresholds = generate_thresholds(config, ModeState.SPECIAL, EnergyState.HIGH_PRICE)
 
-    assert thresholds.target_temperature == 7.0
+    # target 14 + 2, freeze_guard 2 - 2
+    assert thresholds.target_temperature == 16.0
     assert thresholds.target_humidity == 55.0
-    assert thresholds.heater_on_threshold == 1.5
-    assert thresholds.heater_off_threshold == 4.5
-    assert thresholds.cooler_on_threshold == 8.5
-    assert thresholds.cooler_off_threshold == 5.5
+    assert thresholds.heater_on_threshold == 0.0
+    assert thresholds.heater_off_threshold == 1.5
+    assert thresholds.cooler_on_threshold == 16.75
+    assert thresholds.cooler_off_threshold == 15.25
 
 
 def test_generate_thresholds_uses_defaults_as_fallbacks_for_special_mode() -> None:
     config = ConfigParser()
 
+    # Defaults from DEFAULT_SPECIAL_* in thermostat.py: target 5, hyst 1.5, freeze_guard 2.0
     thresholds = generate_thresholds(config, ModeState.SPECIAL, EnergyState.NORMAL_PRICE)
 
     assert thresholds.target_temperature == 5.0
     assert thresholds.target_humidity == 55.0
-    assert thresholds.heater_on_threshold == 3.5
-    assert thresholds.heater_off_threshold == 6.5
-    assert thresholds.cooler_on_threshold == 6.5
-    assert thresholds.cooler_off_threshold == 3.5
+    assert thresholds.heater_on_threshold == 2.0
+    assert thresholds.heater_off_threshold == 3.5
+    assert thresholds.cooler_on_threshold == 5.75
+    assert thresholds.cooler_off_threshold == 4.25
     assert thresholds.fan_on_threshold == 60.0
     assert thresholds.fan_off_threshold == 50.0
 
@@ -196,6 +203,7 @@ class _FakeRelay:
         self.cooler = False
         self.heater = False
         self.fan = False
+        self.compressor_pause = False
         self.calls: list[tuple[str, bool]] = []
 
     def set_cooler_relay(self, state: bool) -> None:
@@ -218,6 +226,13 @@ class _FakeRelay:
 
     def read_vent_fan_relay(self) -> bool:
         return self.fan
+
+    def set_compressor_pause_relay(self, state: bool) -> None:
+        self.compressor_pause = state
+        self.calls.append(("compressor_pause", state))
+
+    def read_compressor_pause_relay(self) -> bool:
+        return self.compressor_pause
 
 
 class _FakeCache:
@@ -253,7 +268,12 @@ def thermostat_testbed(
 
     config = _load_default_config()
     config.set("General", "refresh_rate", "0.01")
-    config.set("General", "min_relay_interval", "0")
+    # Disable vent-fan and cooler-duty-cycle rate limits so a single control
+    # step reflects the intended relay state.
+    config.set("General", "min_vent_fan", "0")
+    config.set("General", "max_cooler_time", "0")
+    config.set("General", "cooler_pause_time", "0")
+    config.set("General", "cooler_soft_start_time", "0")
 
     thermostat = Thermostat(gpio=cast(object, None), config=config)
     return thermostat, relay, sensor, cache
@@ -282,21 +302,27 @@ def test_thermostat_loop_idle_turns_all_relays_off_and_sets_action_idle(
     assert thermostat.action_state == ActionState.IDLE
 
 
-def test_thermostat_loop_changes_relays_only_when_action_state_changes(
+def test_thermostat_loop_cool_mode_engages_and_releases_cooler(
     thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
 ) -> None:
+    """In COOL mode a hot reading engages the cooler; a cold reading releases it."""
     thermostat, relay, sensor, _cache = thermostat_testbed
     thermostat.set_mode(ModeState.COOL)
-    sensor._readings = [(10.0, 40.0), (10.0, 40.0), (3.0, 40.0), (3.0, 40.0)]
 
-    thread = threading.Thread(target=thermostat._loop)
-    thread.start()
-    time.sleep(0.06)
-    thermostat.stop_event.set()
-    thread.join(timeout=1)
+    # Hot temperature → cooler should be engaged.
+    thermostat._temperature = 10.0
+    thermostat._humidity = 40.0
+    thermostat._control_step(now=0.0)
+    assert relay.cooler is True
+    assert thermostat.action_state == ActionState.COOLING
 
-    cooler_calls = [call for call in relay.calls if call[0] == "cooler"]
-    assert cooler_calls == [("cooler", True), ("cooler", False)]
+    # Cold temperature → cooler should be released (fully off since all
+    # duty-cycle timings are 0 in the testbed).
+    thermostat._temperature = 3.0
+    thermostat._control_step(now=1.0)
+    thermostat._control_step(now=2.0)
+    assert relay.cooler is False
+    assert thermostat.action_state == ActionState.IDLE
 
 
 def test_start_and_stop_are_idempotent(
@@ -329,11 +355,19 @@ def test_stop_closes_cache(
     assert cache.close_calls == 1
 
 
-def _make_rate_limited_testbed(
+# ---------------------------------------------------------------------------
+# Cooler duty-cycle state-machine tests
+# ---------------------------------------------------------------------------
+
+
+def _make_duty_cycle_testbed(
     monkeypatch: pytest.MonkeyPatch,
-    interval: float = 0.1,
+    max_cooler_minutes: float = 30.0,
+    cooler_pause_minutes: float = 15.0,
+    cooler_soft_start_minutes: float = 2.0,
+    min_vent_fan_minutes: float = 0.0,
 ) -> tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache]:
-    """Create a thermostat testbed with a short relay interval for rate limiting tests."""
+    """Create a thermostat testbed with configurable duty-cycle timings."""
     relay = _FakeRelay()
     sensor = _FakeSensor([(20.0, 40.0)])
     cache = _FakeCache()
@@ -343,107 +377,256 @@ def _make_rate_limited_testbed(
     monkeypatch.setattr("fridge.thermostat.Cache", lambda _path: cache)
 
     config = _load_default_config()
-    config.set("General", "refresh_rate", "0.01")
-    config.set("General", "min_relay_interval", str(interval))
+    config.set("General", "refresh_rate", "60")
+    config.set("General", "min_vent_fan", str(min_vent_fan_minutes))
+    config.set("General", "max_cooler_time", str(max_cooler_minutes))
+    config.set("General", "cooler_pause_time", str(cooler_pause_minutes))
+    config.set("General", "cooler_soft_start_time", str(cooler_soft_start_minutes))
 
     thermostat = Thermostat(gpio=cast(object, None), config=config)
     return thermostat, relay, sensor, cache
 
 
-def test_relay_rate_limit_blocks_rapid_switching(
+def test_cooler_on_sequence_bit3_high_then_bit0_then_soft_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Relay change is blocked when called again within the minimum interval."""
-    thermostat, relay, sensor, _cache = _make_rate_limited_testbed(monkeypatch, interval=10.0)
+    """Switch cooler on: Bit3 HIGH, Bit0 HIGH, wait soft-start, Bit3 LOW."""
+    thermostat, relay, _sensor, _cache = _make_duty_cycle_testbed(
+        monkeypatch, cooler_soft_start_minutes=2.0
+    )
     thermostat.set_mode(ModeState.COOL)
+    thermostat._temperature = 10.0
+    thermostat._humidity = 40.0
 
-    # First reading triggers cooling (temp above cooler_on_threshold)
-    # Second reading would trigger idle (temp below cooler_off_threshold)
-    # But the second change should be blocked by rate limiting
-    sensor._readings = [(10.0, 40.0), (3.0, 40.0), (3.0, 40.0)]
+    # Tick 1: cool requested, both bits should go high, state SOFT_START.
+    thermostat._control_step(now=0.0)
+    assert relay.compressor_pause is True
+    assert relay.cooler is True
+    # The order matters: Bit 3 must be raised before (or with) Bit 0.
+    bit3_idx = relay.calls.index(("compressor_pause", True))
+    bit0_idx = relay.calls.index(("cooler", True))
+    assert bit3_idx < bit0_idx
 
-    thread = threading.Thread(target=thermostat._loop)
-    thread.start()
-    time.sleep(0.05)
-    thermostat.stop_event.set()
-    thread.join(timeout=1)
+    # Before soft-start elapses, Bit 3 must remain HIGH.
+    thermostat._control_step(now=60.0)  # 1 min
+    assert relay.compressor_pause is True
 
-    cooler_calls = [call for call in relay.calls if call[0] == "cooler"]
-    # Only the first switch (cooler on) should happen; second is rate-limited
-    assert cooler_calls == [("cooler", True)]
+    # After soft-start elapses, Bit 3 goes LOW (compressor released).
+    thermostat._control_step(now=120.0)  # 2 min
+    assert relay.compressor_pause is False
+    assert relay.cooler is True
 
 
-def test_relay_rate_limit_allows_change_after_interval(
+def test_cooler_duty_cycle_pauses_after_max_run_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Relay change is allowed once the minimum interval has elapsed."""
-    thermostat, relay, sensor, _cache = _make_rate_limited_testbed(monkeypatch, interval=0.05)
+    """After max_cooler_time running, compressor pauses; fan stays on."""
+    thermostat, relay, _sensor, _cache = _make_duty_cycle_testbed(
+        monkeypatch,
+        max_cooler_minutes=5.0,
+        cooler_pause_minutes=3.0,
+        cooler_soft_start_minutes=1.0,
+    )
     thermostat.set_mode(ModeState.COOL)
+    thermostat._temperature = 10.0
+    thermostat._humidity = 40.0
 
-    # Temp high → cooling on, then temp low → cooling off after interval
-    sensor._readings = [(10.0, 40.0), (3.0, 40.0), (3.0, 40.0), (3.0, 40.0)]
+    # t=0 SOFT_START -> t=60 RUNNING
+    thermostat._control_step(now=0.0)
+    thermostat._control_step(now=60.0)
+    assert relay.compressor_pause is False
 
-    thread = threading.Thread(target=thermostat._loop)
-    thread.start()
-    # Wait long enough for the interval to pass and second change to happen
-    time.sleep(0.15)
-    thermostat.stop_event.set()
-    thread.join(timeout=1)
+    # After max_run_time (5 min) of RUNNING (i.e. now=60+300=360), enter PAUSED.
+    thermostat._control_step(now=360.0)
+    assert relay.compressor_pause is True
+    assert relay.cooler is True  # fan keeps running
 
-    cooler_calls = [call for call in relay.calls if call[0] == "cooler"]
-    assert cooler_calls == [("cooler", True), ("cooler", False)]
+    # After pause_time (3 min), compressor should resume.
+    thermostat._control_step(now=360.0 + 180.0)
+    assert relay.compressor_pause is False
+    assert relay.cooler is True
 
 
-def test_relay_rate_limit_idle_mode_always_forces_off(
+def test_cooler_off_sequence_pauses_before_dropping_bit0(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Switching to IDLE mode always forces relays off, bypassing rate limit."""
-    thermostat, relay, sensor, _cache = _make_rate_limited_testbed(monkeypatch, interval=10.0)
+    """Off-threshold reached while RUNNING: pause first, then drop Bit 0."""
+    thermostat, relay, _sensor, _cache = _make_duty_cycle_testbed(
+        monkeypatch,
+        max_cooler_minutes=60.0,
+        cooler_pause_minutes=3.0,
+        cooler_soft_start_minutes=1.0,
+    )
     thermostat.set_mode(ModeState.COOL)
+    thermostat._humidity = 40.0
 
-    # First reading triggers cooling
-    sensor._readings = [(10.0, 40.0), (10.0, 40.0)]
+    # Engage: 0 -> SOFT_START, 60 -> RUNNING
+    thermostat._temperature = 10.0
+    thermostat._control_step(now=0.0)
+    thermostat._control_step(now=60.0)
+    assert relay.compressor_pause is False
 
-    thread = threading.Thread(target=thermostat._loop)
-    thread.start()
-    time.sleep(0.03)
+    # Temperature drops below off-threshold while RUNNING → SPIN_DOWN.
+    thermostat._temperature = 3.0
+    thermostat._control_step(now=120.0)
+    assert relay.compressor_pause is True
+    assert relay.cooler is True  # fan keeps running during defrost pause
 
-    # Switch to IDLE — should force relays off despite rate limit
+    # Before the pause elapses, Bit 0 must stay HIGH.
+    thermostat._control_step(now=120.0 + 60.0)
+    assert relay.cooler is True
+
+    # After pause_time (3 min), Bit 0 drops LOW; Bit 3 stays HIGH per spec.
+    thermostat._control_step(now=120.0 + 180.0)
+    assert relay.cooler is False
+    assert relay.compressor_pause is True
+
+
+def test_cooler_off_during_pause_reuses_remaining_pause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Off during duty-cycle pause: reuse remaining pause, no additional wait."""
+    thermostat, relay, _sensor, _cache = _make_duty_cycle_testbed(
+        monkeypatch,
+        max_cooler_minutes=5.0,
+        cooler_pause_minutes=3.0,
+        cooler_soft_start_minutes=1.0,
+    )
+    thermostat.set_mode(ModeState.COOL)
+    thermostat._humidity = 40.0
+
+    # Get into PAUSED: 0 SOFT_START, 60 RUNNING, 360 PAUSED.
+    thermostat._temperature = 10.0
+    thermostat._control_step(now=0.0)
+    thermostat._control_step(now=60.0)
+    thermostat._control_step(now=360.0)
+    assert relay.compressor_pause is True
+    assert relay.cooler is True
+
+    # 1 minute into the 3-minute pause the temperature drops below the
+    # off-threshold. The spin-down should reuse the pause window starting at
+    # 360, so cooler drops off at now=360+180=540 without any extra pause.
+    thermostat._temperature = 3.0
+    thermostat._control_step(now=360.0 + 60.0)  # 1 min into pause
+    assert relay.cooler is True  # still spinning down
+
+    thermostat._control_step(now=360.0 + 180.0)  # end of original pause window
+    assert relay.cooler is False
+
+
+def test_idle_mode_forces_cooler_off_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Switching to IDLE mid-cycle forces both cooler relays off immediately."""
+    thermostat, relay, _sensor, _cache = _make_duty_cycle_testbed(
+        monkeypatch,
+        max_cooler_minutes=60.0,
+        cooler_pause_minutes=15.0,
+        cooler_soft_start_minutes=2.0,
+    )
+    thermostat.set_mode(ModeState.COOL)
+    thermostat._temperature = 10.0
+    thermostat._humidity = 40.0
+    thermostat._control_step(now=0.0)
+    thermostat._control_step(now=120.0)
+    assert relay.cooler is True
+
     thermostat.set_mode(ModeState.IDLE)
-    time.sleep(0.03)
-    thermostat.stop_event.set()
-    thread.join(timeout=1)
+    thermostat._temperature = 10.0
+    thermostat._control_step(now=180.0)
 
     assert relay.cooler is False
-    assert relay.heater is False
-    assert relay.fan is False
+    assert relay.compressor_pause is False
 
 
-def test_relay_rate_limit_independent_per_relay(
+# ---------------------------------------------------------------------------
+# Heater / cooler independence and freeze-guard tests
+# ---------------------------------------------------------------------------
+
+
+def test_heater_turns_on_below_freeze_guard_off_above_plus_hysteresis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Each relay is rate-limited independently."""
-    thermostat, relay, sensor, _cache = _make_rate_limited_testbed(monkeypatch, interval=10.0)
-    thermostat.set_mode(ModeState.COOL)
+    """Heater ON when T < freeze_guard, OFF when T > freeze_guard + hysteresis."""
+    thermostat, relay, _sensor, _cache = _make_duty_cycle_testbed(monkeypatch)
+    thermostat.set_mode(ModeState.COOL)  # freeze_guard=2.0, hysteresis=1.5
+    thermostat._humidity = 40.0
 
-    # Temp high → cooling on, then temp very low → should want heating
-    # Cooler→on is allowed (first change), heater→on should also be allowed
-    # (independent relay, first change for heater)
-    sensor._readings = [(10.0, 40.0), (0.0, 40.0), (0.0, 40.0)]
+    # T well above freeze_guard: heater OFF.
+    thermostat._temperature = 5.0
+    thermostat._control_step(now=0.0)
+    assert relay.heater is False
 
-    thread = threading.Thread(target=thermostat._loop)
-    thread.start()
-    time.sleep(0.05)
-    thermostat.stop_event.set()
-    thread.join(timeout=1)
+    # T below freeze_guard: heater ON.
+    thermostat._temperature = 1.5
+    thermostat._control_step(now=1.0)
+    assert relay.heater is True
 
-    cooler_calls = [call for call in relay.calls if call[0] == "cooler"]
-    heater_calls = [call for call in relay.calls if call[0] == "heater"]
+    # T between freeze_guard and freeze_guard+hysteresis: heater stays ON.
+    thermostat._temperature = 3.0
+    thermostat._control_step(now=2.0)
+    assert relay.heater is True
 
-    # Cooler was turned on first, then rate-limited from turning off
-    assert ("cooler", True) in cooler_calls
-    # Heater should be turned on (independent, first change for heater)
-    assert ("heater", True) in heater_calls
+    # T above freeze_guard+hysteresis (3.5): heater OFF.
+    thermostat._temperature = 4.0
+    thermostat._control_step(now=3.0)
+    assert relay.heater is False
+
+
+def test_heater_not_triggered_during_cooler_spin_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: heater must not turn on while cooler is spinning down."""
+    thermostat, relay, _sensor, _cache = _make_duty_cycle_testbed(
+        monkeypatch,
+        max_cooler_minutes=60.0,
+        cooler_pause_minutes=3.0,
+        cooler_soft_start_minutes=1.0,
+    )
+    thermostat.set_mode(ModeState.COOL)  # freeze_guard=2.0
+    thermostat._humidity = 40.0
+
+    # Engage cooler.
+    thermostat._temperature = 10.0
+    thermostat._control_step(now=0.0)
+    thermostat._control_step(now=60.0)
+
+    # Temperature drops to just above freeze_guard (still > 2.0) and cooler
+    # begins spin-down. Heater must remain OFF throughout the spin-down.
+    thermostat._temperature = 2.5
+    for t in (120.0, 180.0, 240.0, 300.0):
+        thermostat._control_step(now=t)
+        assert relay.heater is False, f"heater unexpectedly on at t={t}"
+
+
+# ---------------------------------------------------------------------------
+# Vent-fan rate-limit tests
+# ---------------------------------------------------------------------------
+
+
+def test_vent_fan_rate_limit_blocks_rapid_switching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Vent fan cannot switch on/off faster than min_vent_fan (both edges)."""
+    thermostat, relay, _sensor, _cache = _make_duty_cycle_testbed(
+        monkeypatch, min_vent_fan_minutes=5.0
+    )
+    thermostat.set_mode(ModeState.COOL)  # target_humidity=55, hyst=5
+
+    # Turn on: humidity high.
+    thermostat._temperature = 5.0
+    thermostat._humidity = 80.0
+    thermostat._control_step(now=0.0)
+    assert relay.fan is True
+
+    # Immediately try to turn off (humidity low) — should be blocked.
+    thermostat._humidity = 20.0
+    thermostat._control_step(now=60.0)  # 1 min later
+    assert relay.fan is True
+
+    # After 5 min (300 s), the change is allowed.
+    thermostat._control_step(now=300.0)
+    assert relay.fan is False
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +687,6 @@ def test_auto_switch_cool_down_to_cool_after_timeout(
 
     config = _load_default_config()
     config.set("General", "refresh_rate", "0.01")
-    config.set("General", "min_relay_interval", "0")
     config.set("CoolDownMode", "auto_switch_hours", "10")
 
     thermostat = Thermostat(gpio=cast(object, None), config=config)
@@ -539,7 +721,6 @@ def test_auto_switch_does_not_trigger_before_timeout(
 
     config = _load_default_config()
     config.set("General", "refresh_rate", "0.01")
-    config.set("General", "min_relay_interval", "0")
     # Very long auto-switch time
     config.set("CoolDownMode", "auto_switch_hours", "100")
 
@@ -675,7 +856,6 @@ def test_thermostat_loop_survives_sensor_read_error(
 
     config = _load_default_config()
     config.set("General", "refresh_rate", "0.01")
-    config.set("General", "min_relay_interval", "0")
 
     thermostat = Thermostat(gpio=cast(object, None), config=config)
     thermostat.set_mode(ModeState.COOL)
