@@ -358,9 +358,11 @@ class RelayGpio:
     Relay GPIO class for controlling the relays on the fridge.
     This class provides methods to control the relays on the fridge using the MCP23017 GPIO expander.
     The relays are connected to the GPIO pins GPB0-2.
-    Bit 0: Cooler relay
+    Bit 0: Cooler relay (mains switch for the cooler unit — circulation fan + compressor)
     Bit 1: Heater relay
-    Bit 2: Vent fan relay
+    Bit 2: Vent fan relay (humidity control)
+    Bit 3: Compressor pause relay (pauses the refrigeration compressor while
+           the circulation fan keeps running)
     """
 
     def __init__(self, gpio: I2cGpio):
@@ -373,6 +375,7 @@ class RelayGpio:
     _COOLER_BIT = 0
     _HEATER_BIT = 1
     _VENT_FAN_BIT = 2
+    _COMPRESSOR_PAUSE_BIT = 3
 
     def _set_relay_bit(self, bit: int, state: bool) -> None:
         """
@@ -436,6 +439,23 @@ class RelayGpio:
         :return: ``True`` if the vent fan relay is active, ``False`` otherwise
         """
         return self._read_relay_bit(self._VENT_FAN_BIT)
+
+    def set_compressor_pause_relay(self, state: bool) -> None:
+        """
+        Set the compressor-pause relay state (Port B Bit 3).
+
+        When ``True`` the refrigeration compressor is paused while the
+        circulation fan (energised by the cooler relay) keeps running.
+        :param state: ``True`` to pause the compressor, ``False`` to resume
+        """
+        self._set_relay_bit(self._COMPRESSOR_PAUSE_BIT, state)
+
+    def read_compressor_pause_relay(self) -> bool:
+        """
+        Read the current state of the compressor-pause relay.
+        :return: ``True`` if the compressor is paused, ``False`` otherwise
+        """
+        return self._read_relay_bit(self._COMPRESSOR_PAUSE_BIT)
 
 
 class ButtonsGpio:
