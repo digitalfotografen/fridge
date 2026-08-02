@@ -40,6 +40,7 @@ from fridge import (
 )
 from fridge.thermostat import Thermostat
 from fridge.mqtt import MqttBridge
+from fridge.hourly_stats import HourlyAggregator
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,13 @@ def run():
 
     mqtt_bridge = MqttBridge(thermostat=thermostat, config=cfg, energy_database=energy_database)
 
+    hourly_aggregator = HourlyAggregator(
+        thermostat,
+        energy_database,
+        cache_dir=os.path.expanduser(cache_path),
+        mqtt_bridge=mqtt_bridge,
+    )
+
     try:
         # Connect blinker signals to thermostat and button LEDs
         def _on_mode_idle(sender, **kwargs):
@@ -326,6 +334,7 @@ def run():
         tibber_fetcher.start()
         energy_controller.start()
         measurement_logger.start()
+        hourly_aggregator.start()
 
         logger.info("Fridge controller running (press Ctrl+C to stop)")
 
@@ -343,6 +352,7 @@ def run():
     finally:
         # Graceful shutdown
         logger.info("Stopping fridge controller")
+        hourly_aggregator.stop()
         measurement_logger.stop()
         energy_controller.stop()
         tibber_fetcher.stop()

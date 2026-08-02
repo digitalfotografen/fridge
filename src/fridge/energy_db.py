@@ -113,6 +113,41 @@ class Measurement:
     price_currency: str | None = None
 
 
+@dataclass(frozen=True)
+class HourlyStats:
+    """
+    Aggregate statistics for a single wall-clock UTC hour.
+
+    :param hour_start: Start of the hour (timezone-aware, stored in UTC).
+    :param mode: Dominant :class:`~fridge.enums.ModeState` name during the hour
+        (longest cumulative time; tie-break: mode active at end-of-hour).
+    :param min_temperature: Minimum temperature sample (``None`` if no valid
+        samples were seen).
+    :param max_temperature: Maximum temperature sample.
+    :param mean_temperature: Time-weighted mean temperature.
+    :param min_humidity: Minimum humidity sample.
+    :param max_humidity: Maximum humidity sample.
+    :param mean_humidity: Time-weighted mean humidity.
+    :param cooler_duty: Percentage (0-100) of the hour the cooler mains
+        (Port B Bit 0) was HIGH.
+    :param compressor_duty: Percentage (0-100) of the hour the compressor was
+        actually running (``CoolerController`` state ``RUNNING``).
+    :param sample_count: Number of samples accumulated during the hour.
+    """
+
+    hour_start: datetime
+    mode: str
+    min_temperature: float | None
+    max_temperature: float | None
+    mean_temperature: float | None
+    min_humidity: float | None
+    max_humidity: float | None
+    mean_humidity: float | None
+    cooler_duty: float
+    compressor_duty: float
+    sample_count: int
+
+
 def _to_utc(value: datetime) -> datetime:
     """
     Normalise a datetime to timezone-aware UTC.
@@ -134,6 +169,23 @@ def _iso(value: datetime) -> str:
 def _parse(value: str) -> datetime:
     """Parse an ISO-8601 string into a timezone-aware UTC datetime."""
     return _to_utc(datetime.fromisoformat(value))
+
+
+def _row_to_hourly_stats(row) -> HourlyStats:
+    """Convert a ``hourly_stats`` result row to a :class:`HourlyStats`."""
+    return HourlyStats(
+        hour_start=_parse(row["hour_start"]),
+        mode=row["mode"],
+        min_temperature=row["min_temperature"],
+        max_temperature=row["max_temperature"],
+        mean_temperature=row["mean_temperature"],
+        min_humidity=row["min_humidity"],
+        max_humidity=row["max_humidity"],
+        mean_humidity=row["mean_humidity"],
+        cooler_duty=row["cooler_duty"],
+        compressor_duty=row["compressor_duty"],
+        sample_count=row["sample_count"],
+    )
 
 
 class EnergyDatabase:
@@ -202,6 +254,23 @@ class EnergyDatabase:
                 target_humidity    REAL,
                 price              REAL,
                 price_currency     TEXT
+            )
+            """
+        )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hourly_stats (
+                hour_start       TEXT PRIMARY KEY,
+                mode             TEXT NOT NULL,
+                min_temperature  REAL,
+                max_temperature  REAL,
+                mean_temperature REAL,
+                min_humidity     REAL,
+                max_humidity     REAL,
+                mean_humidity    REAL,
+                cooler_duty      REAL NOT NULL,
+                compressor_duty  REAL NOT NULL,
+                sample_count     INTEGER NOT NULL
             )
             """
         )
@@ -446,9 +515,98 @@ class EnergyDatabase:
             for row in rows
         ]
 
+    def insert_hourly_stats(self, stats: HourlyStats) -> None:
+        """
+        Insert or replace a single hourly-stats row.
+
+        Existing rows with the same ``hour_start`` are replaced, making this
+        safe to call repeatedly (e.g. on restart to overwrite a stale snapshot).
+
+        :param stats: The :class:`HourlyStats` row to store.
+        """
+        self._connection.execute(
+            """
+            INSERT INTO hourly_stats (
+                hour_start, mode,
+                min_temperature, max_temperature, mean_temperature,
+                min_humidity, max_humidity, mean_humidity,
+                cooler_duty, compressor_duty, sample_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(hour_start) DO UPDATE SET
+                mode=excluded.mode,
+                min_temperature=excluded.min_temperature,
+                max_temperature=excluded.max_temperature,
+                mean_temperature=excluded.mean_temperature,
+                min_humidity=excluded.min_humidity,
+                max_humidity=excluded.max_humidity,
+                mean_humidity=excluded.mean_humidity,
+                cooler_duty=excluded.cooler_duty,
+                compressor_duty=excluded.compressor_duty,
+                sample_count=excluded.sample_count
+            """,
+            (
+                _iso(stats.hour_start),
+                stats.mode,
+                stats.min_temperature,
+                stats.max_temperature,
+                stats.mean_temperature,
+                stats.min_humidity,
+                stats.max_humidity,
+                stats.mean_humidity,
+                stats.cooler_duty,
+                stats.compressor_duty,
+                stats.sample_count,
+            ),
+        )
+        self._connection.commit()
+
+    def get_hourly_stats(self, start: datetime, end: datetime) -> list[HourlyStats]:
+        """
+        Return hourly-stats rows with ``start <= hour_start < end``, ordered by time.
+
+        :param start: Inclusive lower bound (UTC-normalised).
+        :param end: Exclusive upper bound (UTC-normalised).
+        :return: Ordered list of :class:`HourlyStats`.
+        """
+        rows = self._connection.execute(
+            """
+            SELECT hour_start, mode,
+                   min_temperature, max_temperature, mean_temperature,
+                   min_humidity, max_humidity, mean_humidity,
+                   cooler_duty, compressor_duty, sample_count
+            FROM hourly_stats
+            WHERE hour_start >= ? AND hour_start < ?
+            ORDER BY hour_start
+            """,
+            (_iso(start), _iso(end)),
+        ).fetchall()
+        return [_row_to_hourly_stats(row) for row in rows]
+
+    def get_latest_hourly_stats(self) -> HourlyStats | None:
+        """
+        Return the most recent hourly-stats row, or ``None`` if the table is empty.
+
+        :return: The :class:`HourlyStats` with the greatest ``hour_start``.
+        """
+        row = self._connection.execute(
+            """
+            SELECT hour_start, mode,
+                   min_temperature, max_temperature, mean_temperature,
+                   min_humidity, max_humidity, mean_humidity,
+                   cooler_duty, compressor_duty, sample_count
+            FROM hourly_stats
+            ORDER BY hour_start DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        return _row_to_hourly_stats(row)
+
     def prune(self, older_than: datetime) -> int:
         """
-        Delete price, energy-state and measurement rows before *older_than*.
+        Delete price, energy-state, measurement and hourly-stats rows before *older_than*.
 
         :param older_than: Rows with timestamps ``< older_than`` are removed.
         :return: The total number of deleted rows.
@@ -462,6 +620,10 @@ class EnergyDatabase:
         deleted += cursor.rowcount
         cursor = self._connection.execute(
             "DELETE FROM measurements WHERE recorded_at < ?", (cutoff,)
+        )
+        deleted += cursor.rowcount
+        cursor = self._connection.execute(
+            "DELETE FROM hourly_stats WHERE hour_start < ?", (cutoff,)
         )
         deleted += cursor.rowcount
         self._connection.commit()

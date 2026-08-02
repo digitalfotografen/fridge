@@ -395,3 +395,98 @@ def test_periodic_publisher_calls_publish_measurements(mock_client_factory, mock
     bridge._publish_one_tick()
 
     assert spy.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Hourly stats publishing
+# ---------------------------------------------------------------------------
+
+
+def _hourly_row(**overrides):
+    from datetime import UTC, datetime
+
+    from fridge.energy_db import HourlyStats
+
+    defaults = dict(
+        hour_start=datetime(2026, 8, 2, 20, 0, tzinfo=UTC),
+        mode="COOL",
+        min_temperature=4.1,
+        max_temperature=5.9,
+        mean_temperature=5.02,
+        min_humidity=58.2,
+        max_humidity=63.7,
+        mean_humidity=60.4,
+        cooler_duty=62.5,
+        compressor_duty=41.7,
+        sample_count=720,
+    )
+    defaults.update(overrides)
+    return HourlyStats(**defaults)
+
+
+def test_publish_hourly_stats_sends_retained_json_on_hourly_topic(mock_client_factory):
+    import json
+
+    _factory, client = mock_client_factory
+    bridge = MqttBridge(_FakeThermostat(), _make_config())
+    bridge.start()
+    client.publish.reset_mock()
+
+    bridge.publish_hourly_stats(_hourly_row())
+
+    client.publish.assert_called_once()
+    args, kwargs = client.publish.call_args
+    assert args[0] == f"{PREFIX}hourly"
+    payload = json.loads(args[1])
+    assert payload["hour_start"] == "2026-08-02T20:00:00+00:00"
+    assert payload["mode"] == "COOL"
+    assert payload["cooler_duty"] == 62.5
+    assert payload["compressor_duty"] == 41.7
+    assert payload["sample_count"] == 720
+    assert kwargs.get("qos") == 1
+    assert kwargs.get("retain") is True
+    bridge.stop()
+
+
+def test_on_connect_republishes_latest_hourly_stats(mock_client_factory):
+    import json
+
+    from fridge.energy_db import EnergyDatabase
+
+    _factory, client = mock_client_factory
+    database = EnergyDatabase(":memory:")
+    try:
+        database.insert_hourly_stats(_hourly_row(sample_count=42))
+
+        bridge = MqttBridge(_FakeThermostat(), _make_config(), energy_database=database)
+        bridge.start()
+        bridge._on_connect(client, None, {}, 0)
+
+        published = _published(client)
+        assert f"{PREFIX}hourly" in published
+        payload = json.loads(published[f"{PREFIX}hourly"][0])
+        assert payload["sample_count"] == 42
+        # Retained flag preserved.
+        assert published[f"{PREFIX}hourly"][1] is True
+
+        bridge.stop()
+    finally:
+        database.close()
+
+
+def test_on_connect_without_hourly_row_does_not_publish_hourly(mock_client_factory):
+    from fridge.energy_db import EnergyDatabase
+
+    _factory, client = mock_client_factory
+    database = EnergyDatabase(":memory:")
+    try:
+        bridge = MqttBridge(_FakeThermostat(), _make_config(), energy_database=database)
+        bridge.start()
+        bridge._on_connect(client, None, {}, 0)
+
+        published = _published(client)
+        assert f"{PREFIX}hourly" not in published
+
+        bridge.stop()
+    finally:
+        database.close()

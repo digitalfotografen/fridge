@@ -294,7 +294,8 @@ The database can be exported to CSV or Parquet with the `export` command:
 # Merged CSV (default): all tables joined on time into one file
 uv run fridge export --output fridge.csv
 
-# One CSV file per table (fridge_prices.csv, fridge_energy_states.csv, fridge_measurements.csv)
+# One CSV file per table (fridge_prices.csv, fridge_energy_states.csv,
+# fridge_measurements.csv, fridge_hourly_stats.csv)
 uv run fridge export --output fridge.csv --separate-tables
 
 # Parquet export
@@ -304,7 +305,10 @@ uv run fridge export --output fridge.parquet --format parquet
 uv run fridge export --start 2026-01-01T00:00:00 --end 2026-02-01T00:00:00
 ```
 
-By default the three tables are merged into a single file (joined on their timestamp). Use
+By default the four tables are merged into a single file (joined on their timestamp).
+The `hourly_stats` table is left-joined on the hour-truncated timestamp and its
+columns are prefixed with `hourly_` (so the merged frame contains e.g.
+`hourly_mode`, `hourly_cooler_duty`, `hourly_compressor_duty`). Use
 `--separate-tables` to write one file per table, and `--format parquet` for columnar Parquet output.
 
 ## MQTT
@@ -325,6 +329,7 @@ the configuration (default `fridge/`).
 | `state/action`                 | `IDLE` / `COOLING` / `HEATING`       | yes    | On connect and whenever it changes    |
 | `state/energy`                 | `LOW_PRICE` / `NORMAL_PRICE` / `HIGH_PRICE` | yes | On connect and whenever it changes |
 | `status`                       | JSON snapshot (see below)            | yes    | Every `update_interval` seconds       |
+| `hourly`                       | JSON hourly-stats snapshot (see below) | yes  | At the top of every UTC hour, and republished on (re)connect |
 
 The `status` topic carries a single JSON object containing all current
 states, measurements and active targets. Targets that are not active in the
@@ -348,6 +353,35 @@ current mode (e.g. humidity target in `COOL_DOWN`, or all targets in
 `price` is the total Tibber price (including tax) for the current 15-minute slot and
 `price_currency` is the currency reported by Tibber. Both are `null` when no cached price
 is available for the current slot (e.g. before the first successful fetch).
+
+The `hourly` topic carries a retained JSON message with the aggregate
+statistics of the just-closed wall-clock UTC hour. Duty cycles are reported
+as percentages (0-100). Temperature and humidity aggregates are `min`, `max`
+and a time-weighted `mean`. When no sensor readings were valid during the
+hour, the aggregate is `null`.
+
+```json
+{
+  "hour_start": "2026-08-02T20:00:00+00:00",
+  "mode": "COOL",
+  "min_temperature": 4.1,
+  "max_temperature": 5.9,
+  "mean_temperature": 5.02,
+  "min_humidity": 58.2,
+  "max_humidity": 63.7,
+  "mean_humidity": 60.4,
+  "cooler_duty": 62.5,
+  "compressor_duty": 41.7,
+  "sample_count": 720
+}
+```
+
+`cooler_duty` is the percentage of the hour that the cooler mains relay
+(Port B Bit 0) was HIGH. `compressor_duty` is the percentage of the hour
+that the compressor was actually running (`CoolerController` state
+`RUNNING`, i.e. mains HIGH **and** the compressor-pause relay LOW).
+`mode` is the dominant `ModeState` for the hour (longest cumulative time;
+the mode active at end-of-hour is used as the tie-break).
 
 ### Subscribed topics
 
@@ -574,6 +608,23 @@ In addition, temperature, humidity and controller states are logged once per
 `measurement_interval` seconds to the shared SQLite database (`[Logging]
 database_file`). See the *Logging* section above and the `export` command for
 how to retrieve this data for analysis.
+
+### Hourly duty-cycle stats
+Alongside the per-sample measurements, the application aggregates one row
+per wall-clock UTC hour into the `hourly_stats` table of the same database.
+Each row records the dominant mode, min/max/mean temperature and humidity,
+the cooler and compressor duty cycles (percent of the hour that the mains
+relay was HIGH and that the compressor was actually running, respectively)
+and the number of samples that were aggregated.
+
+The running accumulator is periodically snapshotted to the diskcache in
+`~/fridge_data/cache/` so that a restart mid-hour resumes the in-progress
+hour without losing samples. If, on start-up, the persisted snapshot
+belongs to an older hour, that hour is finalised into the database before a
+fresh accumulator is started for the current hour.
+
+On every top-of-hour rollover the finalised row is also published as a
+retained JSON message on the MQTT `hourly` topic (see the MQTT section).
 
 ## Development
 

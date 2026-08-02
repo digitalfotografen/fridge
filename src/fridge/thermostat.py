@@ -430,6 +430,25 @@ class Thermostat:
         """Get the last measured humidity from the sensor."""
         return self._humidity
 
+    def mains_on(self) -> bool:
+        """
+        Return whether the cooler mains (Port B Bit 0) is currently HIGH.
+
+        True in every :class:`CoolerState` except ``OFF``. Used by the hourly
+        duty-cycle aggregator to compute ``cooler_duty``.
+        """
+        return self.cooler.state is not CoolerState.OFF
+
+    def compressor_running(self) -> bool:
+        """
+        Return whether the compressor is actively running.
+
+        True only when the :class:`CoolerController` is in the ``RUNNING``
+        state (Bit 0 HIGH and Bit 3 LOW). Used by the hourly duty-cycle
+        aggregator to compute ``compressor_duty``.
+        """
+        return self.cooler.state is CoolerState.RUNNING
+
     def set_mode(self, mode: ModeState) -> None:
         """
         Set the thermostat mode and refresh thresholds.

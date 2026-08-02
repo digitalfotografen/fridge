@@ -61,6 +61,20 @@ _MEASUREMENTS_SCHEMA = {
     "price_currency": pl.String,
 }
 
+_HOURLY_STATS_SCHEMA = {
+    "hour_start": pl.String,
+    "mode": pl.String,
+    "min_temperature": pl.Float64,
+    "max_temperature": pl.Float64,
+    "mean_temperature": pl.Float64,
+    "min_humidity": pl.Float64,
+    "max_humidity": pl.Float64,
+    "mean_humidity": pl.Float64,
+    "cooler_duty": pl.Float64,
+    "compressor_duty": pl.Float64,
+    "sample_count": pl.Int64,
+}
+
 
 def _isoformat(value: datetime | None) -> str | None:
     """Return the ISO-8601 string for *value* or ``None``."""
@@ -93,12 +107,22 @@ def _measurements_frame(database: EnergyDatabase, start: datetime, end: datetime
     return pl.DataFrame(rows, schema=_MEASUREMENTS_SCHEMA)
 
 
+def _hourly_stats_frame(database: EnergyDatabase, start: datetime, end: datetime) -> pl.DataFrame:
+    rows = []
+    for stats in database.get_hourly_stats(start, end):
+        record = asdict(stats)
+        record["hour_start"] = _isoformat(stats.hour_start)
+        rows.append(record)
+    return pl.DataFrame(rows, schema=_HOURLY_STATS_SCHEMA)
+
+
 def _tables(database: EnergyDatabase, start: datetime, end: datetime) -> dict[str, pl.DataFrame]:
-    """Return all three tables as named polars frames."""
+    """Return all logged tables as named polars frames."""
     return {
         "prices": _prices_frame(database, start, end),
         "energy_states": _energy_states_frame(database, start, end),
         "measurements": _measurements_frame(database, start, end),
+        "hourly_stats": _hourly_stats_frame(database, start, end),
     }
 
 
@@ -121,6 +145,27 @@ def _merged_frame(tables: dict[str, pl.DataFrame]) -> pl.DataFrame:
 
     merged = prices.join(energy_states, on="timestamp", how="full", coalesce=True)
     merged = merged.join(measurements, on="timestamp", how="full", coalesce=True)
+
+    # Left-join hourly stats on hour-truncated timestamp so each row is
+    # annotated with the aggregates of the hour it falls into.
+    hourly = tables["hourly_stats"]
+    if not hourly.is_empty():
+        hourly = hourly.rename(
+            {
+                column: ("timestamp_hour" if column == "hour_start" else f"hourly_{column}")
+                for column in hourly.columns
+            }
+        )
+        # Derive an ISO-hour key from the merged timestamp column by
+        # replacing everything past the hour with ``:00:00+00:00``. All our
+        # timestamps are stored as UTC ISO-8601 strings ending in ``+00:00``,
+        # so this yields the same key format that :func:`_hourly_stats_frame`
+        # produces.
+        merged = merged.with_columns(
+            (pl.col("timestamp").str.slice(0, 13) + pl.lit(":00:00+00:00")).alias("timestamp_hour")
+        )
+        merged = merged.join(hourly, on="timestamp_hour", how="left")
+        merged = merged.drop("timestamp_hour")
 
     if not merged.is_empty():
         merged = merged.sort("timestamp")
