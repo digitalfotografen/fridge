@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from fridge import ActionState, EnergyState, ModeState
-from fridge.thermostat import Thermostat, generate_thresholds
+from fridge.thermostat import CoolerState, Thermostat, generate_thresholds
 
 
 def _load_default_config() -> ConfigParser:
@@ -868,3 +868,54 @@ def test_thermostat_loop_survives_sensor_read_error(
 
     assert thread.is_alive() is False
     assert call_count >= 3
+
+
+# ---------------------------------------------------------------------------
+# Cooler / compressor run-time accessors (used by HourlyAggregator)
+# ---------------------------------------------------------------------------
+
+
+def test_mains_on_false_when_cooler_off(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """mains_on() is False while the CoolerController is in OFF state."""
+    thermostat, _relay, _sensor, _cache = thermostat_testbed
+
+    assert thermostat.cooler.state is CoolerState.OFF
+    assert thermostat.mains_on() is False
+    assert thermostat.compressor_running() is False
+
+
+def test_mains_on_true_in_all_non_off_states(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """mains_on() is True whenever the cooler unit is engaged (any non-OFF state)."""
+    thermostat, _relay, _sensor, _cache = thermostat_testbed
+
+    for state in (
+        CoolerState.SOFT_START,
+        CoolerState.RUNNING,
+        CoolerState.PAUSED,
+        CoolerState.SPIN_DOWN,
+    ):
+        thermostat.cooler.state = state
+        assert thermostat.mains_on() is True, state
+
+
+def test_compressor_running_only_true_in_running_state(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """compressor_running() is True only in the RUNNING state."""
+    thermostat, _relay, _sensor, _cache = thermostat_testbed
+
+    thermostat.cooler.state = CoolerState.RUNNING
+    assert thermostat.compressor_running() is True
+
+    for state in (
+        CoolerState.OFF,
+        CoolerState.SOFT_START,
+        CoolerState.PAUSED,
+        CoolerState.SPIN_DOWN,
+    ):
+        thermostat.cooler.state = state
+        assert thermostat.compressor_running() is False, state

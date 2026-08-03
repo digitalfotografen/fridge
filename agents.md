@@ -85,3 +85,10 @@ Document your agents using Markdown (`.md`) files. Documentation is generated us
 - `myst-parser`
 - `sphinx-autodoc2`
 - `furo` theme
+
+## Notable modules
+- `src/fridge/hourly_stats.py` — background `HourlyAggregator` that samples the
+  thermostat, accumulates cooler/compressor duty cycles and climate aggregates
+  per wall-clock UTC hour, and finalises each closed hour into the shared
+  `hourly_stats` DB table and the retained MQTT `<prefix>/hourly` topic. State
+  is persisted to the diskcache so a mid-hour restart resumes accumulation.
