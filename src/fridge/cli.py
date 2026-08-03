@@ -40,6 +40,7 @@ from fridge import (
 )
 from fridge.thermostat import Thermostat
 from fridge.mqtt import MqttBridge
+from fridge.local_control import LocalControlServer, ModeCommandError, send_mode
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,36 @@ def test_hardware():
     run_hardware_test(gpio, sensor)
 
 
+_MODE_CLI_CHOICES = {
+    "idle": "IDLE",
+    "cool-down": "COOL_DOWN",
+    "cool": "COOL",
+    "special": "SPECIAL",
+}
+
+
+@cli.command()
+@click.argument(
+    "state",
+    type=click.Choice(list(_MODE_CLI_CHOICES.keys()), case_sensitive=False),
+)
+def mode(state: str) -> None:
+    """Switch the running fridge controller to the given mode.
+
+    Requires ``fridge run`` to be active on the same host — the command is
+    delivered over a local Unix-domain socket, no network is used.
+    """
+    canonical = _MODE_CLI_CHOICES[state.lower()]
+    try:
+        reply = send_mode(canonical)
+    except ModeCommandError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        raise SystemExit(1) from exc
+    # Reply format is ``OK <MODE>`` — echo the new mode state to the user.
+    _, _, new_mode = reply.partition(" ")
+    click.echo(f"Mode set to {new_mode or reply}")
+
+
 @cli.command()
 def run():
     """Run the fridge controller daemon."""
@@ -288,6 +319,7 @@ def run():
     )
 
     mqtt_bridge = MqttBridge(thermostat=thermostat, config=cfg, energy_database=energy_database)
+    local_control_server = LocalControlServer()
 
     try:
         # Connect blinker signals to thermostat and button LEDs
@@ -323,6 +355,7 @@ def run():
         thermostat.start()
         buttons.start_interrupt_listener()
         mqtt_bridge.start()
+        local_control_server.start()
         tibber_fetcher.start()
         energy_controller.start()
         measurement_logger.start()
@@ -347,6 +380,7 @@ def run():
         energy_controller.stop()
         tibber_fetcher.stop()
         energy_database.close()
+        local_control_server.stop()
         mqtt_bridge.stop()
         thermostat.stop()
         buttons.stop_interrupt_listener()

@@ -503,6 +503,24 @@ sudo systemctl enable fridge.service
 sudo systemctl start fridge.service
 ```
 
+### `mode` — Switch the active mode locally
+Switches the running fridge controller to the given `ModeState` without requiring
+an MQTT broker or the physical buttons. The command talks to `fridge run` over a
+local Unix-domain socket at `~/fridge_data/fridge.sock` (created with `0600`
+permissions, owner-only), so it works fully offline.
+
+```bash
+uv run fridge mode idle
+uv run fridge mode cool-down
+uv run fridge mode cool
+uv run fridge mode special
+```
+
+On success the command prints e.g. `Mode set to COOL`. If the daemon is not
+running the command exits non-zero with an error message. Internally it emits
+the same blinker signals a button press or MQTT `cmd/mode` message would, so
+the thermostat state and the front-panel LEDs stay in sync.
+
 ### `export` — Export logged data
 Exports the logged database (prices, energy states and measurements) to CSV (default) or
 Parquet for analysis. By default all tables are merged into a single file; use
