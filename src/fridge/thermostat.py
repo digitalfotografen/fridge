@@ -233,6 +233,7 @@ class CoolerController:
         max_run_time: float,
         pause_time: float,
         soft_start_time: float,
+        temp_hum_provider: Callable[[], tuple[float, float]] | None = None,
     ) -> None:
         """
         :param set_cooler: callback to drive Port B Bit 0
@@ -240,12 +241,15 @@ class CoolerController:
         :param max_run_time: max continuous compressor run time in seconds
         :param pause_time: forced pause duration in seconds
         :param soft_start_time: compressor delay after switching cooler on, seconds
+        :param temp_hum_provider: optional callback returning current (temperature, humidity)
+            to be appended to state transition log messages
         """
         self._set_cooler = set_cooler
         self._set_compressor_pause = set_compressor_pause
         self.max_run_time = max_run_time
         self.pause_time = pause_time
         self.soft_start_time = soft_start_time
+        self._temp_hum_provider = temp_hum_provider
         self.state: CoolerState = CoolerState.OFF
         self._entered_at: float = 0.0
 
@@ -257,7 +261,17 @@ class CoolerController:
     def _enter(self, state: CoolerState, now: float) -> None:
         if state is self.state:
             return
-        logger.info("CoolerController: %s -> %s", self.state.name, state.name)
+        if self._temp_hum_provider is not None:
+            temp, hum = self._temp_hum_provider()
+            logger.info(
+                "CoolerController: %s -> %s (temp=%.1f°C, hum=%.1f%%)",
+                self.state.name,
+                state.name,
+                temp,
+                hum,
+            )
+        else:
+            logger.info("CoolerController: %s -> %s", self.state.name, state.name)
         self.state = state
         self._entered_at = now
 
@@ -366,6 +380,7 @@ class Thermostat:
         self.cooler = CoolerController(
             set_cooler=self.relay.set_cooler_relay,
             set_compressor_pause=self.relay.set_compressor_pause_relay,
+            temp_hum_provider=lambda: (self._temperature, self._humidity),
             max_run_time=self.config.getfloat(
                 "General", "max_cooler_time", fallback=DEFAULT_MAX_COOLER_MINUTES
             )
@@ -451,7 +466,7 @@ class Thermostat:
             config=self.config, mode=self.mode, energy_state=self.energy_state
         )
         logger.info(
-            "Mode changed to %s (temperature=%.1f°C, humidity=%.1f%%)",
+            "Mode changed to %s (temp=%.1f°C, hum=%.1f%%)",
             mode.name,
             self._temperature,
             self._humidity,
@@ -471,13 +486,13 @@ class Thermostat:
         self.thresholds = generate_thresholds(
             config=self.config, mode=self.mode, energy_state=self.energy_state
         )
-        logger.info(
-            "Energy state changed to %s (temperature=%.1f°C, humidity=%.1f%%)",
-            energy_state.name,
-            self._temperature,
-            self._humidity,
-        )
         if energy_changed:
+            logger.info(
+                "Energy state changed to %s (temp=%.1f°C, hum=%.1f%%)",
+                energy_state.name,
+                self._temperature,
+                self._humidity,
+            )
             energy_state_changed.send(self, state=energy_state)
 
     def get_energy_state(self) -> EnergyState:
@@ -498,7 +513,7 @@ class Thermostat:
         action_changed = action_state != self._action_state
         if action_changed:
             logger.info(
-                "Action state changed to %s (temperature=%.1f°C, humidity=%.1f%%)",
+                "Action state changed to %s (temp=%.1f°C, hum=%.1f%%)",
                 action_state.name,
                 self._temperature,
                 self._humidity,

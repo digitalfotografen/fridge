@@ -1,5 +1,6 @@
 from configparser import ConfigParser
 import logging
+import math
 import threading
 import time
 from typing import cast
@@ -8,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from fridge import ActionState, EnergyState, ModeState
-from fridge.thermostat import Thermostat, generate_thresholds
+from fridge.thermostat import CoolerController, Thermostat, generate_thresholds
 
 
 def _load_default_config() -> ConfigParser:
@@ -826,6 +827,124 @@ def test_set_action_state_logs_info_with_state_names_and_sensor_values(
         "COOLING" in r.message and "13.6" in r.message and "44.4" in r.message
         for r in caplog.records
     )
+
+
+def test_set_energy_state_logs_only_on_change(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The 'Energy state changed to' log must be emitted only when the state actually changes."""
+    thermostat, _relay, _sensor, _cache = thermostat_testbed
+    thermostat._temperature = 5.0
+    thermostat._humidity = 80.0
+    thermostat.set_energy_state(EnergyState.NORMAL_PRICE)
+
+    with caplog.at_level(logging.INFO, logger="fridge.thermostat"):
+        thermostat.set_energy_state(EnergyState.NORMAL_PRICE)
+        thermostat.set_energy_state(EnergyState.NORMAL_PRICE)
+
+    energy_logs = [r for r in caplog.records if "Energy state changed to" in r.message]
+    assert energy_logs == []
+
+    with caplog.at_level(logging.INFO, logger="fridge.thermostat"):
+        thermostat.set_energy_state(EnergyState.LOW_PRICE)
+
+    energy_logs = [r for r in caplog.records if "Energy state changed to" in r.message]
+    assert len(energy_logs) == 1
+
+
+def test_state_change_logs_use_short_keys(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Mode/energy/action logs must use short keys `temp=` and `hum=` (not `temperature=`/`humidity=`)."""
+    thermostat, _relay, _sensor, _cache = thermostat_testbed
+    thermostat._temperature = 5.2
+    thermostat._humidity = 88.4
+
+    with caplog.at_level(logging.INFO, logger="fridge.thermostat"):
+        thermostat.set_mode(ModeState.COOL)
+        thermostat.set_energy_state(EnergyState.LOW_PRICE)
+        thermostat._set_action_state(ActionState.COOLING)
+
+    for needle in ("Mode changed to", "Energy state changed to", "Action state changed to"):
+        matches = [r for r in caplog.records if needle in r.message]
+        assert matches, f"missing log for {needle!r}"
+        for r in matches:
+            assert "temp=" in r.message and "hum=" in r.message
+            assert "temperature=" not in r.message
+            assert "humidity=" not in r.message
+
+
+def test_cooler_controller_log_includes_temp_hum() -> None:
+    """CoolerController state transitions must include temp/hum when a provider is set."""
+    calls: list[bool] = []
+    controller = CoolerController(
+        set_cooler=lambda v: calls.append(v),
+        set_compressor_pause=lambda v: None,
+        max_run_time=60.0,
+        pause_time=10.0,
+        soft_start_time=5.0,
+        temp_hum_provider=lambda: (7.0, 81.0),
+    )
+
+    import logging as _logging
+
+    caplog_records: list[_logging.LogRecord] = []
+
+    class _Handler(_logging.Handler):
+        def emit(self, record: _logging.LogRecord) -> None:
+            caplog_records.append(record)
+
+    handler = _Handler(level=_logging.INFO)
+    src_logger = _logging.getLogger("fridge.thermostat")
+    src_logger.addHandler(handler)
+    src_logger.setLevel(_logging.INFO)
+    try:
+        controller.tick(now=0.0, cool_requested=True)
+    finally:
+        src_logger.removeHandler(handler)
+
+    transition_msgs = [
+        r.getMessage() for r in caplog_records if "CoolerController:" in r.getMessage()
+    ]
+    assert transition_msgs, "expected a CoolerController transition log"
+    assert any("temp=7.0" in m and "hum=81.0" in m for m in transition_msgs)
+
+
+def test_cooler_controller_log_shows_nan_when_readings_unavailable() -> None:
+    """CoolerController must render NaN in the log when the provider returns NaN readings."""
+    controller = CoolerController(
+        set_cooler=lambda v: None,
+        set_compressor_pause=lambda v: None,
+        max_run_time=60.0,
+        pause_time=10.0,
+        soft_start_time=5.0,
+        temp_hum_provider=lambda: (math.nan, math.nan),
+    )
+
+    import logging as _logging
+
+    caplog_records: list[_logging.LogRecord] = []
+
+    class _Handler(_logging.Handler):
+        def emit(self, record: _logging.LogRecord) -> None:
+            caplog_records.append(record)
+
+    handler = _Handler(level=_logging.INFO)
+    src_logger = _logging.getLogger("fridge.thermostat")
+    src_logger.addHandler(handler)
+    src_logger.setLevel(_logging.INFO)
+    try:
+        controller.tick(now=0.0, cool_requested=True)
+    finally:
+        src_logger.removeHandler(handler)
+
+    transition_msgs = [
+        r.getMessage() for r in caplog_records if "CoolerController:" in r.getMessage()
+    ]
+    assert transition_msgs
+    assert any("nan" in m.lower() for m in transition_msgs)
 
 
 # ---------------------------------------------------------------------------

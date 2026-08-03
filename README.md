@@ -272,6 +272,21 @@ The configuration file is read when the application starts.
 The application logs events (like state changes) to a file named fridge.log in the current working directory
 using the standard Python logging library.
 
+State-change log lines (mode, energy state, action state and `CoolerController` transitions)
+include the current sensor reading in a compact form using the short keys `temp` and `hum`,
+for example:
+
+```
+Mode changed to COOL (temp=5.2°C, hum=88.4%)
+Energy state changed to NORMAL_PRICE (temp=5.2°C, hum=88.4%)
+Action state changed to COOLING (temp=7.0°C, hum=81.0%)
+CoolerController: OFF -> SOFT_START (temp=7.0°C, hum=81.0%)
+```
+
+If the sensor has not yet produced a valid reading, the values are rendered as `nan`.
+The "Energy state changed to ..." line is only emitted when the energy state actually
+changes (no longer on every re-evaluation).
+
 The application logs temperature, humidity and controller states to an SQLite database once per
 `measurement_interval` seconds (default 60). These measurements are stored in the **same** database
 as the Tibber prices and computed energy states (`[Logging] database_file`, default
