@@ -1,5 +1,9 @@
 # Agent for this project
+
+For a compact token-efficient reference, see [agents_guide.md](agents_guide.md).
+
 The project's long-term goal is described in the README.md file.
+Implementation details (hardware, architecture, state machines) are in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 This project is a Raspberry Pi-based controller for a game fridge.
 The fridge has a cooler, a heater, and ventilation fan that are controlled via relays over a I2C bus.
 The fridge is controlled by a Raspberry Pi 4 with a custom interface board.
@@ -18,7 +22,7 @@ Don't change the code too much, and don't make changes that are not related to t
 Keep the codebase clean and maintainable.
 
 For each step,
-- Create a plane
+- Create a plan
 - Implement tests for the step.
 - Implement the step.
 - Test the step.

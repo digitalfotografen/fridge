@@ -10,7 +10,7 @@ import pytest
 
 from fridge import ActionState, EnergyState, ModeState
 from fridge.thermostat import CoolerController, Thermostat, generate_thresholds
-from fridge.thermostat import CoolerState, Thermostat, generate_thresholds
+from fridge.thermostat import CoolerState
 
 
 def _load_default_config() -> ConfigParser:

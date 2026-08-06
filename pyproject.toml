@@ -5,7 +5,9 @@ authors = [
     { name = "Ulrik Södergren", email = "ulrik@oddtech.se" }
 ]
 requires-python = ">=3.13"
-description = "Game fridge controller. Controlles cooler, heater and ventilation based on temperature and humidity"
+description = "Game fridge controller. Controls cooler, heater and ventilation based on temperature and humidity"
+license = { file = "LICENSE" }
+readme = "README.md"
 dependencies = [
     "gpiozero>=2.0.1",
     "paho-mqtt == 1.6.1",
