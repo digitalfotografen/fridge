@@ -13,7 +13,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from fridge.enums import EnergyState
-from fridge.energy_db import EnergyDatabase, EnergyStateSlot, Measurement, PriceSlot
+from fridge.energy_db import (
+    EnergyDatabase,
+    EnergyStateSlot,
+    HourlyStats,
+    Measurement,
+    PriceSlot,
+)
 
 
 BASE = datetime(2026, 6, 23, 14, 0, tzinfo=UTC)
@@ -212,20 +218,111 @@ def test_insert_measurement_allows_null_values(db: EnergyDatabase):
     assert result[0].price_currency is None
 
 
+def _hourly(hour_start: datetime, **overrides) -> HourlyStats:
+    defaults = dict(
+        hour_start=hour_start,
+        mode="COOL",
+        min_temperature=4.1,
+        max_temperature=5.9,
+        mean_temperature=5.02,
+        min_humidity=58.2,
+        max_humidity=63.7,
+        mean_humidity=60.4,
+        cooler_duty=62.5,
+        compressor_duty=41.7,
+        sample_count=720,
+    )
+    defaults.update(overrides)
+    return HourlyStats(**defaults)
+
+
+def test_insert_and_get_hourly_stats_round_trip(db: EnergyDatabase):
+    db.insert_hourly_stats(_hourly(BASE))
+
+    result = db.get_hourly_stats(BASE, BASE + timedelta(hours=1))
+
+    assert len(result) == 1
+    row = result[0]
+    assert row.hour_start == BASE
+    assert row.mode == "COOL"
+    assert row.min_temperature == 4.1
+    assert row.max_temperature == 5.9
+    assert row.mean_temperature == 5.02
+    assert row.cooler_duty == 62.5
+    assert row.compressor_duty == 41.7
+    assert row.sample_count == 720
+
+
+def test_hourly_stats_range_ordered_and_half_open(db: EnergyDatabase):
+    for i in range(4):
+        db.insert_hourly_stats(_hourly(BASE + timedelta(hours=i), sample_count=i))
+
+    result = db.get_hourly_stats(BASE, BASE + timedelta(hours=2))
+
+    assert [r.hour_start for r in result] == [BASE, BASE + timedelta(hours=1)]
+    assert [r.sample_count for r in result] == [0, 1]
+
+
+def test_insert_hourly_stats_replaces_existing(db: EnergyDatabase):
+    db.insert_hourly_stats(_hourly(BASE, cooler_duty=10.0))
+    db.insert_hourly_stats(_hourly(BASE, cooler_duty=90.0))
+
+    result = db.get_hourly_stats(BASE, BASE + timedelta(hours=1))
+
+    assert len(result) == 1
+    assert result[0].cooler_duty == 90.0
+
+
+def test_insert_hourly_stats_allows_null_aggregates(db: EnergyDatabase):
+    db.insert_hourly_stats(
+        _hourly(
+            BASE,
+            min_temperature=None,
+            max_temperature=None,
+            mean_temperature=None,
+            min_humidity=None,
+            max_humidity=None,
+            mean_humidity=None,
+        )
+    )
+
+    result = db.get_hourly_stats(BASE, BASE + timedelta(hours=1))
+
+    assert len(result) == 1
+    assert result[0].min_temperature is None
+    assert result[0].mean_humidity is None
+
+
+def test_get_latest_hourly_stats(db: EnergyDatabase):
+    assert db.get_latest_hourly_stats() is None
+
+    db.insert_hourly_stats(_hourly(BASE, sample_count=1))
+    db.insert_hourly_stats(_hourly(BASE + timedelta(hours=2), sample_count=3))
+    db.insert_hourly_stats(_hourly(BASE + timedelta(hours=1), sample_count=2))
+
+    latest = db.get_latest_hourly_stats()
+
+    assert latest is not None
+    assert latest.hour_start == BASE + timedelta(hours=2)
+    assert latest.sample_count == 3
+
+
 def test_prune_removes_old_rows(db: EnergyDatabase):
     db.upsert_prices(_slots(4))
     db.upsert_energy_states([EnergyStateSlot(BASE, EnergyState.LOW_PRICE)])
     db.insert_measurement(_measurement(BASE))
+    db.insert_hourly_stats(_hourly(BASE))
 
     deleted = db.prune(BASE + timedelta(minutes=30))
 
-    # Two price slots + one energy state + one measurement removed
-    assert deleted == 4
+    # Two price slots + one energy state + one measurement + one hourly stat
+    assert deleted == 5
     remaining = db.get_prices(BASE, BASE + timedelta(hours=1))
     assert [s.starts_at for s in remaining] == [
         BASE + timedelta(minutes=30),
         BASE + timedelta(minutes=45),
     ]
+    assert db.get_hourly_stats(BASE, BASE + timedelta(hours=2)) == []
 
 
 def test_creates_file_and_persists(tmp_path):

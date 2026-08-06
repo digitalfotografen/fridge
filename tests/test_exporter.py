@@ -13,7 +13,13 @@ from datetime import UTC, datetime, timedelta
 import polars as pl
 import pytest
 
-from fridge.energy_db import EnergyDatabase, EnergyStateSlot, Measurement, PriceSlot
+from fridge.energy_db import (
+    EnergyDatabase,
+    EnergyStateSlot,
+    HourlyStats,
+    Measurement,
+    PriceSlot,
+)
 from fridge.enums import EnergyState
 from fridge.exporter import export_database
 
@@ -69,6 +75,7 @@ def test_separate_tables_writes_one_file_per_table(db: EnergyDatabase, tmp_path)
         "fridge_prices.csv",
         "fridge_energy_states.csv",
         "fridge_measurements.csv",
+        "fridge_hourly_stats.csv",
     }
     for path in written:
         assert path.exists()
@@ -122,3 +129,50 @@ def test_empty_database_exports_header_only(tmp_path):
 def test_unknown_format_raises(db: EnergyDatabase, tmp_path):
     with pytest.raises(ValueError):
         export_database(db, tmp_path / "x.txt", fmt="txt")
+
+
+def _insert_hourly(db: EnergyDatabase, hour_start: datetime) -> None:
+    db.insert_hourly_stats(
+        HourlyStats(
+            hour_start=hour_start,
+            mode="COOL",
+            min_temperature=4.1,
+            max_temperature=5.9,
+            mean_temperature=5.02,
+            min_humidity=58.2,
+            max_humidity=63.7,
+            mean_humidity=60.4,
+            cooler_duty=62.5,
+            compressor_duty=41.7,
+            sample_count=720,
+        )
+    )
+
+
+def test_separate_tables_writes_hourly_stats_file(db: EnergyDatabase, tmp_path):
+    _insert_hourly(db, BASE)
+    output = tmp_path / "fridge.csv"
+
+    export_database(db, output, separate_tables=True)
+
+    hourly = pl.read_csv(tmp_path / "fridge_hourly_stats.csv")
+    assert hourly.height == 1
+    assert hourly["cooler_duty"][0] == 62.5
+    assert hourly["compressor_duty"][0] == 41.7
+    assert hourly["sample_count"][0] == 720
+
+
+def test_merged_export_left_joins_hourly_stats(db: EnergyDatabase, tmp_path):
+    _insert_hourly(db, BASE)
+    output = tmp_path / "fridge.csv"
+
+    export_database(db, output)
+
+    frame = pl.read_csv(output)
+    assert frame.height == 1
+    # Merged columns are prefixed to avoid clashes with the ``mode`` and
+    # temperature aggregates.
+    assert "hourly_mode" in frame.columns
+    assert "hourly_cooler_duty" in frame.columns
+    assert frame["hourly_cooler_duty"][0] == 62.5
+    assert frame["hourly_compressor_duty"][0] == 41.7

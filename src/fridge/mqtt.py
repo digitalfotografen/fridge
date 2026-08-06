@@ -65,6 +65,23 @@ DEFAULT_UPDATE_INTERVAL = 60
 DEFAULT_QOS = 1
 
 
+def _hourly_stats_payload(row) -> dict:
+    """Serialise an :class:`~fridge.energy_db.HourlyStats` row as a JSON dict."""
+    return {
+        "hour_start": row.hour_start.isoformat(),
+        "mode": row.mode,
+        "min_temperature": row.min_temperature,
+        "max_temperature": row.max_temperature,
+        "mean_temperature": row.mean_temperature,
+        "min_humidity": row.min_humidity,
+        "max_humidity": row.max_humidity,
+        "mean_humidity": row.mean_humidity,
+        "cooler_duty": row.cooler_duty,
+        "compressor_duty": row.compressor_duty,
+        "sample_count": row.sample_count,
+    }
+
+
 _MODE_BY_NAME = {state.name: state for state in ModeState}
 _MODE_SIGNAL = {
     ModeState.IDLE: mode_idle,
@@ -130,6 +147,7 @@ class MqttBridge:
         self._topic_action = f"{self._prefix}state/action"
         self._topic_energy = f"{self._prefix}state/energy"
         self._topic_status = f"{self._prefix}status"
+        self._topic_hourly = f"{self._prefix}hourly"
         self._topic_cmd_mode = f"{self._prefix}cmd/mode"
 
     # ------------------------------------------------------------------
@@ -218,6 +236,11 @@ class MqttBridge:
         self._publish_state(self._topic_action, self._thermostat.get_action_state().name)
         self._publish_state(self._topic_energy, self._thermostat.get_energy_state().name)
 
+        # Republish the most recent finalised hourly-stats row (retained) so a
+        # fresh subscriber sees the last known hour without waiting for the
+        # next top-of-hour rollover.
+        self._republish_latest_hourly_stats()
+
     def _on_disconnect(self, _client, _userdata, rc, *_args, **_kwargs) -> None:
         if rc != 0:
             logger.warning("MQTT disconnected unexpectedly (rc=%s)", rc)
@@ -267,6 +290,39 @@ class MqttBridge:
             self._client.publish(topic, payload, qos=DEFAULT_QOS, retain=True)
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("Failed to publish %s: %s", topic, exc)
+
+    def publish_hourly_stats(self, row) -> None:
+        """
+        Publish a finalised :class:`~fridge.energy_db.HourlyStats` row.
+
+        The payload is a retained JSON message on ``<prefix>hourly`` at
+        QoS 1. Publishing failures are logged but do not raise so a broker
+        outage cannot break the aggregator.
+
+        :param row: The :class:`~fridge.energy_db.HourlyStats` row to publish.
+        """
+        payload = _hourly_stats_payload(row)
+        try:
+            self._client.publish(
+                self._topic_hourly,
+                json.dumps(payload),
+                qos=DEFAULT_QOS,
+                retain=True,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to publish hourly stats: %s", exc)
+
+    def _republish_latest_hourly_stats(self) -> None:
+        """Publish the most recent DB row (if any) on the retained hourly topic."""
+        if self._energy_database is None:
+            return
+        try:
+            row = self._energy_database.get_latest_hourly_stats()
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Failed to read latest hourly stats for republish")
+            return
+        if row is not None:
+            self.publish_hourly_stats(row)
 
     def publish_measurements(self) -> None:
         """
