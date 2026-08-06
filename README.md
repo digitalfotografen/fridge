@@ -1,13 +1,68 @@
 # Fridge-App
 This application is controlling and monitoring a large fridge room / shed for game (boar, dear, etc.).
-This is used to cool down the body slowly and then keep it at a controlled temperature 
+This is used to cool down the animal body slowly and then keep it at a controlled temperature 
 to let the meat tender before cutting the meat.
-It can also be used to keep a massive amount of beer cold.
+It can also be used to keep a massive amount of beer cold (or other food).
 
 The fridge is equipped with a temperature and humidity sensor, a heater and a cooler
 and a fan to ventilate.
 
-This is a work in progress and not all features are implemented yet.
+This app tries to save some money on electricity by nudging the target temperature based
+on energy prices. I has an integration with [Tibber](https://tibber.com/se) to fetch electricity prices and
+adjust the target temperature based on the price.
+
+The Fridge-App runs on a Raspberry Pi 4B with I2C connected sensors and GPIO.
+
+# Why and how I built this system
+There are obviously easier ways to solve this, like using the cooler's internal thermostat
+(except that mine was broken).
+My wife found a scrapped telecom equipment shed with a working cooler, it has housed a 3G cell system.
+It actually had two different cooling systems plus an electrical heater.
+I removed the "free cooling system" and kept the refrigerator and heater.
+
+I build lab and factory automation systems in Python for a living, often running on Raspberry Pi.
+And I design custom electronics for my clients.
+I already had most of the hardware in my workshop.
+But at the time of writing, I like to try building apps like this unsing agentic programming with LLMS.
+This was mainly built using Claude Code. I wrote a detailed specification document (this one) and the agents.md
+before writing the code.
+Then there has been multiple iterations on the system where Claude has been responsible for updating the documents.
+
+## System overview
+The Raspberry Pi is running the Fridge-App which controls the fridge system.
+It has four relays:
+- Ventilation fan
+- Heater
+- Refrigerator main switch (stats the circulation fan)
+- Fake thermostat, this controls the refrigerator compressor 
+ 
+It has four input buttons with LED indicators:
+- Pause (Off)
+- Cool down
+- Cool
+- Special (like cool but with different settings, I use this for cooling beer or ~~~~crystallizing honey)
+
+The system has an electrical three-level mains switch:
+- Manual override, this runs cooler without thermostat. A fallback if my controller fails
+- Off 
+- Raspberry Pi control
+
+## What it looks like
+The fridge is used both for curing the meat and for cutting and packing.
+![](/Users/ulrik/Code/fridge/docs/img/IMG_8466.jpg "Interior")
+
+![](/Users/ulrik/Code/fridge/docs/img/IMG_8467.jpg "Raspberry Pi controller, electrical panel and ventilation fan")
+
+![](/Users/ulrik/Code/fridge/docs/img/IMG_8468.jpg "Cooler and heater")
+
+![](/Users/ulrik/Code/fridge/docs/img/IMG_8465.jpg "Exterior")
+
+![](/Users/ulrik/Code/fridge/docs/img/IMG_8469.jpg "Cooler exterior")
+
+## Want to know more
+Feel free to use this as inspiration for Your own projects.
+You can email ulrik@oddtech.se if with questions if You like to build Your own game fridge,
+but don't expect a fast reply or detailed help. This was built to solve my private needs.
 
 # Typical usage
 The system is Idle mode when the fridge is not in use.
