@@ -322,6 +322,7 @@ def test_run_starts_and_stops_thermostat(runner: CliRunner, tmp_data_dir: Path) 
         patch("fridge.cli.Thermostat", return_value=mock_thermostat),
         patch("fridge.cli.ButtonsGpio", return_value=mock_buttons),
         patch("fridge.cli.MqttBridge"),
+        patch("fridge.cli.LocalControlServer"),
         patch("fridge.cli.EnergyDatabase"),
         patch("fridge.cli.TibberPriceFetcher"),
         patch("fridge.cli.EnergyPlanner"),
@@ -344,3 +345,49 @@ def test_run_starts_and_stops_thermostat(runner: CliRunner, tmp_data_dir: Path) 
     mock_thermostat.stop.assert_called_once()
     mock_buttons.stop_interrupt_listener.assert_called_once()
     mock_logging_shutdown.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Mode command tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cli_arg, canonical",
+    [
+        ("idle", "IDLE"),
+        ("cool-down", "COOL_DOWN"),
+        ("cool", "COOL"),
+        ("special", "SPECIAL"),
+        ("COOL", "COOL"),  # case-insensitive click.Choice
+    ],
+)
+def test_mode_command_sends_canonical_name(runner: CliRunner, cli_arg: str, canonical: str) -> None:
+    """mode command translates the CLI argument to the canonical mode name."""
+    with patch("fridge.cli.send_mode", return_value=f"OK {canonical}") as mock_send:
+        result = runner.invoke(cli, ["mode", cli_arg])
+
+    assert result.exit_code == 0, result.output
+    mock_send.assert_called_once_with(canonical)
+    assert f"Mode set to {canonical}" in result.output
+
+
+def test_mode_command_reports_error_when_daemon_missing(runner: CliRunner) -> None:
+    """mode command exits non-zero when the daemon is not reachable."""
+    from fridge.local_control import ModeCommandError
+
+    with patch(
+        "fridge.cli.send_mode",
+        side_effect=ModeCommandError("fridge daemon not running"),
+    ):
+        result = runner.invoke(cli, ["mode", "cool"])
+
+    assert result.exit_code != 0
+    assert "fridge daemon not running" in result.output
+
+
+def test_mode_command_rejects_unknown_state(runner: CliRunner) -> None:
+    """mode command rejects unsupported state names via click.Choice."""
+    result = runner.invoke(cli, ["mode", "frozen"])
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output or "invalid choice" in result.output.lower()

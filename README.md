@@ -272,6 +272,21 @@ The configuration file is read when the application starts.
 The application logs events (like state changes) to a file named fridge.log in the current working directory
 using the standard Python logging library.
 
+State-change log lines (mode, energy state, action state and `CoolerController` transitions)
+include the current sensor reading in a compact form using the short keys `temp` and `hum`,
+for example:
+
+```
+Mode changed to COOL (temp=5.2°C, hum=88.4%)
+Energy state changed to NORMAL_PRICE (temp=5.2°C, hum=88.4%)
+Action state changed to COOLING (temp=7.0°C, hum=81.0%)
+CoolerController: OFF -> SOFT_START (temp=7.0°C, hum=81.0%)
+```
+
+If the sensor has not yet produced a valid reading, the values are rendered as `nan`.
+The "Energy state changed to ..." line is only emitted when the energy state actually
+changes (no longer on every re-evaluation).
+
 The application logs temperature, humidity and controller states to an SQLite database once per
 `measurement_interval` seconds (default 60). These measurements are stored in the **same** database
 as the Tibber prices and computed energy states (`[Logging] database_file`, default
@@ -536,6 +551,24 @@ sudo systemctl daemon-reload
 sudo systemctl enable fridge.service
 sudo systemctl start fridge.service
 ```
+
+### `mode` — Switch the active mode locally
+Switches the running fridge controller to the given `ModeState` without requiring
+an MQTT broker or the physical buttons. The command talks to `fridge run` over a
+local Unix-domain socket at `~/fridge_data/fridge.sock` (created with `0600`
+permissions, owner-only), so it works fully offline.
+
+```bash
+uv run fridge mode idle
+uv run fridge mode cool-down
+uv run fridge mode cool
+uv run fridge mode special
+```
+
+On success the command prints e.g. `Mode set to COOL`. If the daemon is not
+running the command exits non-zero with an error message. Internally it emits
+the same blinker signals a button press or MQTT `cmd/mode` message would, so
+the thermostat state and the front-panel LEDs stay in sync.
 
 ### `export` — Export logged data
 Exports the logged database (prices, energy states and measurements) to CSV (default) or
