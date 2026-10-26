@@ -211,14 +211,42 @@ periodically, so a mid-hour restart resumes accumulation without losing samples.
 
 The application is designed to run unattended and recover from transient errors:
 
+- **Sensor start-up** — The SHT30 only returns data while it measures periodically.
+  After a power-up, power dip or reset it is idle and NACKs every read
+  (`OSError [Errno 5]`). When the thermostat starts it therefore calls
+  `Sht30.start_measurement()`, which sends break → soft reset → clear status →
+  start ART (4 Hz) and waits for the first sample. A failure here is logged and left
+  to the read recovery below.
 - **Sensor reads** — `Sht30.read_data()` retries up to 3 times with a short delay.
-  If all retries fail, the thermostat loop logs a warning and skips the current cycle
-  instead of terminating the thread.
+  If all retries fail it assumes the sensor has lost its measurement mode, runs
+  `start_measurement()` once and makes a final read. If that also fails, the
+  thermostat loop logs a warning and skips the current cycle instead of terminating
+  the thread, and the next cycle tries again.
 - **Button interrupts** — The interrupt handler reads the MCP23017 INTCAP register
   (captured pin state at interrupt time) so a quick button release does not cause the
   press to be missed. I2C errors during interrupt handling are caught and logged.
 - **Network / Tibber** — Fetch failures are logged; the controller keeps running on
   the last cached energy plan.
+- **Database access** — The control loop, measurement logger, Tibber fetcher and
+  energy planner share one SQLite connection. `EnergyDatabase` serialises every query
+  and commit with a lock, because a `sqlite3.Connection` must not be used from several
+  threads at the same time.
+
+### Troubleshooting the SHT30 sensor
+
+`scripts/sht30_diag.py` checks the I2C bus lines, that the MCP23017 (0x20) and SHT30
+(0x44) answer, and whether the SHT30 is delivering samples. Stop the service first so
+nothing else uses the bus:
+
+```bash
+sudo systemctl stop fridge
+cd ~/fridge && uv run python scripts/sht30_diag.py            # observe only
+cd ~/fridge && uv run python scripts/sht30_diag.py --recover  # also try break -> soft reset -> ART
+sudo systemctl start fridge
+```
+
+Failing fetches while both devices answer mean the sensor is not in periodic mode.
+`--recover` (or restarting the service) restarts measurement.
 
 ---
 
@@ -247,13 +275,13 @@ Tests must be run on the Raspberry Pi (hardware I2C is required for some tests).
 
 ```bash
 # All non-hardware tests
-uv run pytest tests/ --ignore=tests/test_thermostat_hw.py
+uv run pytest -m "not hardware"
 
-# Hardware-backed tests (run on the Pi)
-uv run pytest tests/test_thermostat_hw.py
+# Hardware-backed tests (run on the Pi, stop the fridge service first)
+uv run pytest -m hardware
 
 # With coverage
-uv run pytest tests/ --ignore=tests/test_thermostat_hw.py --cov=fridge
+uv run pytest -m "not hardware" --cov=fridge
 ```
 
 ### Linting and formatting

@@ -351,6 +351,11 @@ class Thermostat:
         """
         self.config = config
         self.sensor = Sht30()
+        try:
+            self.sensor.start_measurement()
+        except OSError as exc:
+            # Sht30.read_data() re-initialises the sensor when its reads keep failing.
+            logger.warning("Failed to start SHT30 measurement: %s", exc)
         self.relay = RelayGpio(gpio)
         self._cache_dir = os.path.expanduser(cache_path)
         self.cache = Cache(self._cache_dir)

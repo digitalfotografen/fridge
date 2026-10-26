@@ -10,6 +10,7 @@ license = { file = "LICENSE" }
 readme = "README.md"
 dependencies = [
     "gpiozero>=2.0.1",
+    "lgpio>=0.2.2.0; sys_platform == 'linux'",
     "paho-mqtt == 1.6.1",
     "smbus2>=0.6",
     "diskcache>=5.6",

@@ -104,6 +104,13 @@ fridge cools down before the expensive period. See
 - Raspberry Pi 4B with the custom interface board (for hardware operation)
 
 ### Install
+On the Raspberry Pi, first install the build dependencies for `lgpio`. gpiozero uses
+`lgpio` to watch the button interrupt pin, and there is no prebuilt wheel for Python 3.13:
+```bash
+sudo apt install swig liblgpio-dev
+```
+
+Clone the repository and install dependencies:
 ```bash
 git clone <repository-url>
 cd fridge

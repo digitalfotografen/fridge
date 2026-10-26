@@ -69,13 +69,13 @@ def test_generate_thresholds_cool_mode_high_price_uses_freeze_guard() -> None:
 
     thresholds = generate_thresholds(config, ModeState.COOL, EnergyState.HIGH_PRICE)
 
-    # target 5 + 2, freeze_guard 2 - 2
-    assert thresholds.target_temperature == 7.0
+    # target 6 + 2, freeze_guard 2 - 2
+    assert thresholds.target_temperature == 8.0
     assert thresholds.target_humidity == 55.0
     assert thresholds.heater_on_threshold == 0.0
     assert thresholds.heater_off_threshold == 1.5
-    assert thresholds.cooler_on_threshold == 7.75
-    assert thresholds.cooler_off_threshold == 6.25
+    assert thresholds.cooler_on_threshold == 8.75
+    assert thresholds.cooler_off_threshold == 7.25
     assert thresholds.fan_on_threshold == 60.0
     assert thresholds.fan_off_threshold == 50.0
 
@@ -193,6 +193,10 @@ class _FakeSensor:
     def __init__(self, readings: list[tuple[float, float]]) -> None:
         self._readings = readings
         self._index = 0
+        self.start_measurement_calls = 0
+
+    def start_measurement(self) -> None:
+        self.start_measurement_calls += 1
 
     def read_data(self) -> tuple[float, float]:
         value = self._readings[min(self._index, len(self._readings) - 1)]
@@ -963,6 +967,9 @@ def test_thermostat_loop_survives_sensor_read_error(
     call_count = 0
 
     class _FlakySensor:
+        def start_measurement(self) -> None:
+            pass
+
         def read_data(self) -> tuple[float, float]:
             nonlocal call_count
             call_count += 1
@@ -988,6 +995,35 @@ def test_thermostat_loop_survives_sensor_read_error(
 
     assert thread.is_alive() is False
     assert call_count >= 3
+
+
+def test_thermostat_starts_sensor_measurement_once_at_startup(
+    thermostat_testbed: tuple[Thermostat, _FakeRelay, _FakeSensor, _FakeCache],
+) -> None:
+    """Thermostat should put the sensor into periodic measurement mode once on init."""
+    _thermostat, _relay, sensor, _cache = thermostat_testbed
+
+    assert sensor.start_measurement_calls == 1
+
+
+def test_thermostat_survives_sensor_start_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failing sensor initialisation should be logged, not crash the thermostat."""
+
+    class _DeadSensor(_FakeSensor):
+        def start_measurement(self) -> None:
+            raise OSError("Remote I/O error")
+
+    monkeypatch.setattr("fridge.thermostat.Sht30", lambda: _DeadSensor([(20.0, 40.0)]))
+    monkeypatch.setattr("fridge.thermostat.RelayGpio", lambda _gpio: _FakeRelay())
+    monkeypatch.setattr("fridge.thermostat.Cache", lambda _path: _FakeCache())
+
+    with caplog.at_level(logging.WARNING, logger="fridge.thermostat"):
+        thermostat = Thermostat(gpio=cast(object, None), config=_load_default_config())
+
+    assert thermostat.sensor is not None
+    assert "Failed to start SHT30 measurement" in caplog.text
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ as a cache so the controller works without network access.
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -339,3 +340,80 @@ def test_creates_file_and_persists(tmp_path):
         assert len(result) == 1
     finally:
         reopened.close()
+
+
+class _LockCheckingConnection:
+    """Connection proxy that records calls made without the database lock held."""
+
+    def __init__(self, database: EnergyDatabase) -> None:
+        self._database = database
+        self._connection = database._connection
+        self.unlocked_calls: list[str] = []
+
+    def __getattr__(self, name: str):
+        attribute = getattr(self._connection, name)
+        if not callable(attribute):
+            return attribute
+
+        def checked(*args, **kwargs):
+            if not self._database._lock.locked():
+                self.unlocked_calls.append(name)
+            return attribute(*args, **kwargs)
+
+        return checked
+
+
+def test_every_public_method_holds_lock_while_using_connection(db: EnergyDatabase):
+    proxy = _LockCheckingConnection(db)
+    db._connection = proxy
+    end = BASE + timedelta(hours=2)
+
+    db.upsert_prices(_slots(2))
+    db.get_prices(BASE, end)
+    db.get_price_at(BASE)
+    db.upsert_energy_states([EnergyStateSlot(BASE, EnergyState.NORMAL_PRICE)])
+    db.get_energy_states(BASE, end)
+    db.get_energy_state_at(BASE)
+    db.insert_measurement(_measurement(BASE))
+    db.get_measurements(BASE, end)
+    db.insert_hourly_stats(_hourly(BASE))
+    db.get_hourly_stats(BASE, end)
+    db.get_latest_hourly_stats()
+    db.prune(BASE)
+    db._connection = proxy._connection
+
+    assert proxy.unlocked_calls == []
+
+
+@pytest.mark.timeout(60)
+def test_concurrent_writes_and_reads_do_not_raise(tmp_path):
+    """Tibber writes and logger reads on one shared connection must not collide."""
+    database = EnergyDatabase(str(tmp_path / "fridge.db"))
+    errors: list[BaseException] = []
+    rounds = 200
+
+    def write_prices() -> None:
+        try:
+            for _ in range(rounds):
+                database.upsert_prices(_slots(192))
+        except BaseException as exc:  # noqa: BLE001 - collect anything for the assert
+            errors.append(exc)
+
+    def read_prices() -> None:
+        try:
+            for i in range(rounds * 20):
+                database.get_price_at(BASE + timedelta(minutes=i % 2880))
+                database.insert_measurement(_measurement(BASE + timedelta(seconds=i)))
+        except BaseException as exc:  # noqa: BLE001 - collect anything for the assert
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write_prices), threading.Thread(target=read_prices)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        database.close()
+
+    assert errors == []
