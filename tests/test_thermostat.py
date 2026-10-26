@@ -69,13 +69,13 @@ def test_generate_thresholds_cool_mode_high_price_uses_freeze_guard() -> None:
 
     thresholds = generate_thresholds(config, ModeState.COOL, EnergyState.HIGH_PRICE)
 
-    # target 5 + 2, freeze_guard 2 - 2
-    assert thresholds.target_temperature == 7.0
+    # target 6 + 2, freeze_guard 2 - 2
+    assert thresholds.target_temperature == 8.0
     assert thresholds.target_humidity == 55.0
     assert thresholds.heater_on_threshold == 0.0
     assert thresholds.heater_off_threshold == 1.5
-    assert thresholds.cooler_on_threshold == 7.75
-    assert thresholds.cooler_off_threshold == 6.25
+    assert thresholds.cooler_on_threshold == 8.75
+    assert thresholds.cooler_off_threshold == 7.25
     assert thresholds.fan_on_threshold == 60.0
     assert thresholds.fan_off_threshold == 50.0
 
