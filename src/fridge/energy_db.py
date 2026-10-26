@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -211,70 +212,72 @@ class EnergyDatabase:
             if parent:
                 os.makedirs(parent, exist_ok=True)
         # ``check_same_thread=False`` lets the controller, the Tibber fetcher
-        # and the test threads share one connection. SQLite serialises writes
-        # internally; our access pattern is low-frequency.
+        # and the measurement logger share one connection. A ``sqlite3.Connection``
+        # is not safe for concurrent use, so every access holds ``_lock``.
+        self._lock = threading.Lock()
         self._connection = sqlite3.connect(db_path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
         """Create the ``prices`` and ``energy_states`` tables if needed."""
-        self._connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS prices (
-                starts_at  TEXT PRIMARY KEY,
-                total      REAL NOT NULL,
-                energy     REAL,
-                tax        REAL,
-                currency   TEXT,
-                level      TEXT,
-                fetched_at TEXT NOT NULL
+        with self._lock:
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS prices (
+                    starts_at  TEXT PRIMARY KEY,
+                    total      REAL NOT NULL,
+                    energy     REAL,
+                    tax        REAL,
+                    currency   TEXT,
+                    level      TEXT,
+                    fetched_at TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS energy_states (
-                starts_at    TEXT PRIMARY KEY,
-                energy_state INTEGER NOT NULL,
-                computed_at  TEXT NOT NULL
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS energy_states (
+                    starts_at    TEXT PRIMARY KEY,
+                    energy_state INTEGER NOT NULL,
+                    computed_at  TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS measurements (
-                recorded_at        TEXT PRIMARY KEY,
-                temperature        REAL,
-                humidity           REAL,
-                mode               TEXT NOT NULL,
-                action_state       TEXT NOT NULL,
-                energy_state       TEXT NOT NULL,
-                target_temperature REAL,
-                target_humidity    REAL,
-                price              REAL,
-                price_currency     TEXT
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS measurements (
+                    recorded_at        TEXT PRIMARY KEY,
+                    temperature        REAL,
+                    humidity           REAL,
+                    mode               TEXT NOT NULL,
+                    action_state       TEXT NOT NULL,
+                    energy_state       TEXT NOT NULL,
+                    target_temperature REAL,
+                    target_humidity    REAL,
+                    price              REAL,
+                    price_currency     TEXT
+                )
+                """
             )
-            """
-        )
-        self._connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS hourly_stats (
-                hour_start       TEXT PRIMARY KEY,
-                mode             TEXT NOT NULL,
-                min_temperature  REAL,
-                max_temperature  REAL,
-                mean_temperature REAL,
-                min_humidity     REAL,
-                max_humidity     REAL,
-                mean_humidity    REAL,
-                cooler_duty      REAL NOT NULL,
-                compressor_duty  REAL NOT NULL,
-                sample_count     INTEGER NOT NULL
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hourly_stats (
+                    hour_start       TEXT PRIMARY KEY,
+                    mode             TEXT NOT NULL,
+                    min_temperature  REAL,
+                    max_temperature  REAL,
+                    mean_temperature REAL,
+                    min_humidity     REAL,
+                    max_humidity     REAL,
+                    mean_humidity    REAL,
+                    cooler_duty      REAL NOT NULL,
+                    compressor_duty  REAL NOT NULL,
+                    sample_count     INTEGER NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._connection.commit()
+            self._connection.commit()
 
     def upsert_prices(self, slots: list[PriceSlot]) -> None:
         """
@@ -285,33 +288,34 @@ class EnergyDatabase:
 
         :param slots: Price slots to store.
         """
-        fetched_at = _iso(datetime.now(tz=UTC))
-        self._connection.executemany(
-            """
-            INSERT INTO prices (starts_at, total, energy, tax, currency, level, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(starts_at) DO UPDATE SET
-                total=excluded.total,
-                energy=excluded.energy,
-                tax=excluded.tax,
-                currency=excluded.currency,
-                level=excluded.level,
-                fetched_at=excluded.fetched_at
-            """,
-            [
-                (
-                    _iso(slot.starts_at),
-                    slot.total,
-                    slot.energy,
-                    slot.tax,
-                    slot.currency,
-                    slot.level,
-                    fetched_at,
-                )
-                for slot in slots
-            ],
-        )
-        self._connection.commit()
+        with self._lock:
+            fetched_at = _iso(datetime.now(tz=UTC))
+            self._connection.executemany(
+                """
+                INSERT INTO prices (starts_at, total, energy, tax, currency, level, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(starts_at) DO UPDATE SET
+                    total=excluded.total,
+                    energy=excluded.energy,
+                    tax=excluded.tax,
+                    currency=excluded.currency,
+                    level=excluded.level,
+                    fetched_at=excluded.fetched_at
+                """,
+                [
+                    (
+                        _iso(slot.starts_at),
+                        slot.total,
+                        slot.energy,
+                        slot.tax,
+                        slot.currency,
+                        slot.level,
+                        fetched_at,
+                    )
+                    for slot in slots
+                ],
+            )
+            self._connection.commit()
 
     def get_prices(self, start: datetime, end: datetime) -> list[PriceSlot]:
         """
@@ -321,26 +325,27 @@ class EnergyDatabase:
         :param end: Exclusive upper bound (UTC-normalised).
         :return: Ordered list of :class:`PriceSlot`.
         """
-        rows = self._connection.execute(
-            """
-            SELECT starts_at, total, energy, tax, currency, level
-            FROM prices
-            WHERE starts_at >= ? AND starts_at < ?
-            ORDER BY starts_at
-            """,
-            (_iso(start), _iso(end)),
-        ).fetchall()
-        return [
-            PriceSlot(
-                starts_at=_parse(row["starts_at"]),
-                total=row["total"],
-                energy=row["energy"],
-                tax=row["tax"],
-                currency=row["currency"] or "",
-                level=row["level"],
-            )
-            for row in rows
-        ]
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT starts_at, total, energy, tax, currency, level
+                FROM prices
+                WHERE starts_at >= ? AND starts_at < ?
+                ORDER BY starts_at
+                """,
+                (_iso(start), _iso(end)),
+            ).fetchall()
+            return [
+                PriceSlot(
+                    starts_at=_parse(row["starts_at"]),
+                    total=row["total"],
+                    energy=row["energy"],
+                    tax=row["tax"],
+                    currency=row["currency"] or "",
+                    level=row["level"],
+                )
+                for row in rows
+            ]
 
     def upsert_energy_states(self, slots: list[EnergyStateSlot]) -> None:
         """
@@ -348,18 +353,19 @@ class EnergyDatabase:
 
         :param slots: Energy-state slots to store.
         """
-        computed_at = _iso(datetime.now(tz=UTC))
-        self._connection.executemany(
-            """
-            INSERT INTO energy_states (starts_at, energy_state, computed_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(starts_at) DO UPDATE SET
-                energy_state=excluded.energy_state,
-                computed_at=excluded.computed_at
-            """,
-            [(_iso(slot.starts_at), int(slot.energy_state), computed_at) for slot in slots],
-        )
-        self._connection.commit()
+        with self._lock:
+            computed_at = _iso(datetime.now(tz=UTC))
+            self._connection.executemany(
+                """
+                INSERT INTO energy_states (starts_at, energy_state, computed_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(starts_at) DO UPDATE SET
+                    energy_state=excluded.energy_state,
+                    computed_at=excluded.computed_at
+                """,
+                [(_iso(slot.starts_at), int(slot.energy_state), computed_at) for slot in slots],
+            )
+            self._connection.commit()
 
     def get_energy_states(self, start: datetime, end: datetime) -> list[EnergyStateSlot]:
         """
@@ -369,22 +375,23 @@ class EnergyDatabase:
         :param end: Exclusive upper bound (UTC-normalised).
         :return: Ordered list of :class:`EnergyStateSlot`.
         """
-        rows = self._connection.execute(
-            """
-            SELECT starts_at, energy_state
-            FROM energy_states
-            WHERE starts_at >= ? AND starts_at < ?
-            ORDER BY starts_at
-            """,
-            (_iso(start), _iso(end)),
-        ).fetchall()
-        return [
-            EnergyStateSlot(
-                starts_at=_parse(row["starts_at"]),
-                energy_state=EnergyState(row["energy_state"]),
-            )
-            for row in rows
-        ]
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT starts_at, energy_state
+                FROM energy_states
+                WHERE starts_at >= ? AND starts_at < ?
+                ORDER BY starts_at
+                """,
+                (_iso(start), _iso(end)),
+            ).fetchall()
+            return [
+                EnergyStateSlot(
+                    starts_at=_parse(row["starts_at"]),
+                    energy_state=EnergyState(row["energy_state"]),
+                )
+                for row in rows
+            ]
 
     def get_energy_state_at(self, when: datetime) -> EnergyState | None:
         """
@@ -397,19 +404,20 @@ class EnergyDatabase:
         :return: The :class:`~fridge.enums.EnergyState` or ``None`` if no
             matching slot is stored.
         """
-        row = self._connection.execute(
-            """
-            SELECT energy_state
-            FROM energy_states
-            WHERE starts_at <= ?
-            ORDER BY starts_at DESC
-            LIMIT 1
-            """,
-            (_iso(when),),
-        ).fetchone()
-        if row is None:
-            return None
-        return EnergyState(row["energy_state"])
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT energy_state
+                FROM energy_states
+                WHERE starts_at <= ?
+                ORDER BY starts_at DESC
+                LIMIT 1
+                """,
+                (_iso(when),),
+            ).fetchone()
+            if row is None:
+                return None
+            return EnergyState(row["energy_state"])
 
     def get_price_at(self, when: datetime) -> PriceSlot | None:
         """
@@ -418,26 +426,27 @@ class EnergyDatabase:
         :param when: Point in time to look up.
         :return: The :class:`PriceSlot` or ``None`` if no matching slot exists.
         """
-        row = self._connection.execute(
-            """
-            SELECT starts_at, total, energy, tax, currency, level
-            FROM prices
-            WHERE starts_at <= ?
-            ORDER BY starts_at DESC
-            LIMIT 1
-            """,
-            (_iso(when),),
-        ).fetchone()
-        if row is None:
-            return None
-        return PriceSlot(
-            starts_at=_parse(row["starts_at"]),
-            total=row["total"],
-            energy=row["energy"],
-            tax=row["tax"],
-            currency=row["currency"] or "",
-            level=row["level"],
-        )
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT starts_at, total, energy, tax, currency, level
+                FROM prices
+                WHERE starts_at <= ?
+                ORDER BY starts_at DESC
+                LIMIT 1
+                """,
+                (_iso(when),),
+            ).fetchone()
+            if row is None:
+                return None
+            return PriceSlot(
+                starts_at=_parse(row["starts_at"]),
+                total=row["total"],
+                energy=row["energy"],
+                tax=row["tax"],
+                currency=row["currency"] or "",
+                level=row["level"],
+            )
 
     def insert_measurement(self, measurement: Measurement) -> None:
         """
@@ -448,38 +457,39 @@ class EnergyDatabase:
 
         :param measurement: The :class:`Measurement` to store.
         """
-        self._connection.execute(
-            """
-            INSERT INTO measurements (
-                recorded_at, temperature, humidity, mode, action_state,
-                energy_state, target_temperature, target_humidity, price, price_currency
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO measurements (
+                    recorded_at, temperature, humidity, mode, action_state,
+                    energy_state, target_temperature, target_humidity, price, price_currency
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(recorded_at) DO UPDATE SET
+                    temperature=excluded.temperature,
+                    humidity=excluded.humidity,
+                    mode=excluded.mode,
+                    action_state=excluded.action_state,
+                    energy_state=excluded.energy_state,
+                    target_temperature=excluded.target_temperature,
+                    target_humidity=excluded.target_humidity,
+                    price=excluded.price,
+                    price_currency=excluded.price_currency
+                """,
+                (
+                    _iso(measurement.recorded_at),
+                    measurement.temperature,
+                    measurement.humidity,
+                    measurement.mode,
+                    measurement.action_state,
+                    measurement.energy_state,
+                    measurement.target_temperature,
+                    measurement.target_humidity,
+                    measurement.price,
+                    measurement.price_currency,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(recorded_at) DO UPDATE SET
-                temperature=excluded.temperature,
-                humidity=excluded.humidity,
-                mode=excluded.mode,
-                action_state=excluded.action_state,
-                energy_state=excluded.energy_state,
-                target_temperature=excluded.target_temperature,
-                target_humidity=excluded.target_humidity,
-                price=excluded.price,
-                price_currency=excluded.price_currency
-            """,
-            (
-                _iso(measurement.recorded_at),
-                measurement.temperature,
-                measurement.humidity,
-                measurement.mode,
-                measurement.action_state,
-                measurement.energy_state,
-                measurement.target_temperature,
-                measurement.target_humidity,
-                measurement.price,
-                measurement.price_currency,
-            ),
-        )
-        self._connection.commit()
+            self._connection.commit()
 
     def get_measurements(self, start: datetime, end: datetime) -> list[Measurement]:
         """
@@ -489,31 +499,32 @@ class EnergyDatabase:
         :param end: Exclusive upper bound (UTC-normalised).
         :return: Ordered list of :class:`Measurement`.
         """
-        rows = self._connection.execute(
-            """
-            SELECT recorded_at, temperature, humidity, mode, action_state,
-                   energy_state, target_temperature, target_humidity, price, price_currency
-            FROM measurements
-            WHERE recorded_at >= ? AND recorded_at < ?
-            ORDER BY recorded_at
-            """,
-            (_iso(start), _iso(end)),
-        ).fetchall()
-        return [
-            Measurement(
-                recorded_at=_parse(row["recorded_at"]),
-                temperature=row["temperature"],
-                humidity=row["humidity"],
-                mode=row["mode"],
-                action_state=row["action_state"],
-                energy_state=row["energy_state"],
-                target_temperature=row["target_temperature"],
-                target_humidity=row["target_humidity"],
-                price=row["price"],
-                price_currency=row["price_currency"],
-            )
-            for row in rows
-        ]
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT recorded_at, temperature, humidity, mode, action_state,
+                       energy_state, target_temperature, target_humidity, price, price_currency
+                FROM measurements
+                WHERE recorded_at >= ? AND recorded_at < ?
+                ORDER BY recorded_at
+                """,
+                (_iso(start), _iso(end)),
+            ).fetchall()
+            return [
+                Measurement(
+                    recorded_at=_parse(row["recorded_at"]),
+                    temperature=row["temperature"],
+                    humidity=row["humidity"],
+                    mode=row["mode"],
+                    action_state=row["action_state"],
+                    energy_state=row["energy_state"],
+                    target_temperature=row["target_temperature"],
+                    target_humidity=row["target_humidity"],
+                    price=row["price"],
+                    price_currency=row["price_currency"],
+                )
+                for row in rows
+            ]
 
     def insert_hourly_stats(self, stats: HourlyStats) -> None:
         """
@@ -524,42 +535,43 @@ class EnergyDatabase:
 
         :param stats: The :class:`HourlyStats` row to store.
         """
-        self._connection.execute(
-            """
-            INSERT INTO hourly_stats (
-                hour_start, mode,
-                min_temperature, max_temperature, mean_temperature,
-                min_humidity, max_humidity, mean_humidity,
-                cooler_duty, compressor_duty, sample_count
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO hourly_stats (
+                    hour_start, mode,
+                    min_temperature, max_temperature, mean_temperature,
+                    min_humidity, max_humidity, mean_humidity,
+                    cooler_duty, compressor_duty, sample_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(hour_start) DO UPDATE SET
+                    mode=excluded.mode,
+                    min_temperature=excluded.min_temperature,
+                    max_temperature=excluded.max_temperature,
+                    mean_temperature=excluded.mean_temperature,
+                    min_humidity=excluded.min_humidity,
+                    max_humidity=excluded.max_humidity,
+                    mean_humidity=excluded.mean_humidity,
+                    cooler_duty=excluded.cooler_duty,
+                    compressor_duty=excluded.compressor_duty,
+                    sample_count=excluded.sample_count
+                """,
+                (
+                    _iso(stats.hour_start),
+                    stats.mode,
+                    stats.min_temperature,
+                    stats.max_temperature,
+                    stats.mean_temperature,
+                    stats.min_humidity,
+                    stats.max_humidity,
+                    stats.mean_humidity,
+                    stats.cooler_duty,
+                    stats.compressor_duty,
+                    stats.sample_count,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(hour_start) DO UPDATE SET
-                mode=excluded.mode,
-                min_temperature=excluded.min_temperature,
-                max_temperature=excluded.max_temperature,
-                mean_temperature=excluded.mean_temperature,
-                min_humidity=excluded.min_humidity,
-                max_humidity=excluded.max_humidity,
-                mean_humidity=excluded.mean_humidity,
-                cooler_duty=excluded.cooler_duty,
-                compressor_duty=excluded.compressor_duty,
-                sample_count=excluded.sample_count
-            """,
-            (
-                _iso(stats.hour_start),
-                stats.mode,
-                stats.min_temperature,
-                stats.max_temperature,
-                stats.mean_temperature,
-                stats.min_humidity,
-                stats.max_humidity,
-                stats.mean_humidity,
-                stats.cooler_duty,
-                stats.compressor_duty,
-                stats.sample_count,
-            ),
-        )
-        self._connection.commit()
+            self._connection.commit()
 
     def get_hourly_stats(self, start: datetime, end: datetime) -> list[HourlyStats]:
         """
@@ -569,19 +581,20 @@ class EnergyDatabase:
         :param end: Exclusive upper bound (UTC-normalised).
         :return: Ordered list of :class:`HourlyStats`.
         """
-        rows = self._connection.execute(
-            """
-            SELECT hour_start, mode,
-                   min_temperature, max_temperature, mean_temperature,
-                   min_humidity, max_humidity, mean_humidity,
-                   cooler_duty, compressor_duty, sample_count
-            FROM hourly_stats
-            WHERE hour_start >= ? AND hour_start < ?
-            ORDER BY hour_start
-            """,
-            (_iso(start), _iso(end)),
-        ).fetchall()
-        return [_row_to_hourly_stats(row) for row in rows]
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT hour_start, mode,
+                       min_temperature, max_temperature, mean_temperature,
+                       min_humidity, max_humidity, mean_humidity,
+                       cooler_duty, compressor_duty, sample_count
+                FROM hourly_stats
+                WHERE hour_start >= ? AND hour_start < ?
+                ORDER BY hour_start
+                """,
+                (_iso(start), _iso(end)),
+            ).fetchall()
+            return [_row_to_hourly_stats(row) for row in rows]
 
     def get_latest_hourly_stats(self) -> HourlyStats | None:
         """
@@ -589,20 +602,21 @@ class EnergyDatabase:
 
         :return: The :class:`HourlyStats` with the greatest ``hour_start``.
         """
-        row = self._connection.execute(
-            """
-            SELECT hour_start, mode,
-                   min_temperature, max_temperature, mean_temperature,
-                   min_humidity, max_humidity, mean_humidity,
-                   cooler_duty, compressor_duty, sample_count
-            FROM hourly_stats
-            ORDER BY hour_start DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        if row is None:
-            return None
-        return _row_to_hourly_stats(row)
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT hour_start, mode,
+                       min_temperature, max_temperature, mean_temperature,
+                       min_humidity, max_humidity, mean_humidity,
+                       cooler_duty, compressor_duty, sample_count
+                FROM hourly_stats
+                ORDER BY hour_start DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            return _row_to_hourly_stats(row)
 
     def prune(self, older_than: datetime) -> int:
         """
@@ -611,27 +625,29 @@ class EnergyDatabase:
         :param older_than: Rows with timestamps ``< older_than`` are removed.
         :return: The total number of deleted rows.
         """
-        cutoff = _iso(older_than)
-        cursor = self._connection.execute("DELETE FROM prices WHERE starts_at < ?", (cutoff,))
-        deleted = cursor.rowcount
-        cursor = self._connection.execute(
-            "DELETE FROM energy_states WHERE starts_at < ?", (cutoff,)
-        )
-        deleted += cursor.rowcount
-        cursor = self._connection.execute(
-            "DELETE FROM measurements WHERE recorded_at < ?", (cutoff,)
-        )
-        deleted += cursor.rowcount
-        cursor = self._connection.execute(
-            "DELETE FROM hourly_stats WHERE hour_start < ?", (cutoff,)
-        )
-        deleted += cursor.rowcount
-        self._connection.commit()
-        return deleted
+        with self._lock:
+            cutoff = _iso(older_than)
+            cursor = self._connection.execute("DELETE FROM prices WHERE starts_at < ?", (cutoff,))
+            deleted = cursor.rowcount
+            cursor = self._connection.execute(
+                "DELETE FROM energy_states WHERE starts_at < ?", (cutoff,)
+            )
+            deleted += cursor.rowcount
+            cursor = self._connection.execute(
+                "DELETE FROM measurements WHERE recorded_at < ?", (cutoff,)
+            )
+            deleted += cursor.rowcount
+            cursor = self._connection.execute(
+                "DELETE FROM hourly_stats WHERE hour_start < ?", (cutoff,)
+            )
+            deleted += cursor.rowcount
+            self._connection.commit()
+            return deleted
 
     def close(self) -> None:
         """Close the underlying database connection."""
-        self._connection.close()
+        with self._lock:
+            self._connection.close()
 
     def __enter__(self) -> EnergyDatabase:
         return self

@@ -1,6 +1,6 @@
 import logging
 import threading
-from smbus2 import SMBus
+from smbus2 import SMBus, i2c_msg
 import time
 from fridge.enums import ModeState
 from fridge.signals import mode_idle, mode_cooling_down, mode_cool, mode_special
@@ -89,8 +89,10 @@ def write_word_register(addr: int, reg: int, value: int) -> None:
 
 SHT30_ADDRESS = 0x44
 SHT30_ART = 0x2B32
+SHT30_BREAK = 0x3093
+SHT30_CLEAR_STATUS = 0x3041
 SHT30_FETCH_DATA = 0xE000
-SHT30_STATUS = 0x3022
+SHT30_STATUS = 0xF32D
 SHT30_SOFT_RESET = 0x30A2
 
 
@@ -98,72 +100,97 @@ class Sht30:
     """
     Interface for the SHT30 temperature and humidity sensor.
     This will be used to read temperature and humidity from the sensor.
-    The sensor will be initialized to use the ART (Accelerated Response Time) mode, to measure at 4Hz.
+    :meth:`start_measurement` puts the sensor in ART (Accelerated Response Time) mode,
+    measuring at 4Hz. Fetch Data is NACKed until this has been done after a power-up or reset.
     """
+
+    _READ_RETRIES = 3
+    _RETRY_DELAY = 0.05
 
     def __init__(self, addr: int = SHT30_ADDRESS):
         self.addr = addr
 
+    def _send_command(self, command: int) -> None:
+        """
+        Send a 16-bit command to the sensor as a plain two-byte I2C write.
+        :param command: SHT30 command code
+        """
+        with _bus_lock:
+            with SMBus(1) as bus:
+                bus.i2c_rdwr(i2c_msg.write(self.addr, [command >> 8, command & 0xFF]))
+
+    def _send_command_and_read(self, command: int, length: int) -> list[int]:
+        """
+        Send a 16-bit command and read back ``length`` bytes in one bus transaction.
+        :param command: SHT30 command code
+        :param length: Number of bytes to read
+        :return: The bytes read from the sensor
+        """
+        with _bus_lock:
+            with SMBus(1) as bus:
+                bus.i2c_rdwr(i2c_msg.write(self.addr, [command >> 8, command & 0xFF]))
+                time.sleep(0.002)
+                read = i2c_msg.read(self.addr, length)
+                bus.i2c_rdwr(read)
+                return list(read)
+
+    def start_measurement(self) -> None:
+        """
+        Initialise the sensor and start periodic measurement in ART mode.
+
+        Sends break (stop any periodic mode), soft reset, clear status and start ART,
+        then waits until the first sample is ready.
+
+        :raises OSError: On I2C communication failure.
+        """
+        self._send_command(SHT30_BREAK)
+        time.sleep(0.002)
+        self._send_command(SHT30_SOFT_RESET)
+        time.sleep(0.005)
+        self._send_command(SHT30_CLEAR_STATUS)
+        time.sleep(0.002)
+        self._send_command(SHT30_ART)
+        time.sleep(0.3)
+        logger.info("SHT30 measurement started in ART mode")
+
     def read_status(self) -> int:
         """
         Read the 16-bit status register from the SHT30 sensor.
-        :return: Status register value
-        """
-        # Note: If the sensor is in ART mode, it might not respond to some commands.
-        # However, data fetch command works.
-        try:
-            with _bus_lock:
-                with SMBus(1) as bus:
-                    # Write command 0x3022
-                    bus.write_i2c_block_data(self.addr, SHT30_STATUS >> 8, [SHT30_STATUS & 0xFF])
-                    import time
 
-                    time.sleep(0.01)
-                    # Read 3 bytes (2 bytes status + 1 byte CRC)
-                    data = bus.read_i2c_block_data(self.addr, 0, 3)
-                    if self._calculate_crc(bytes(data[:2])) != data[2]:
-                        expected = self._calculate_crc(bytes(data[:2]))
-                        logger.error(
-                            f"CRC check failed for status register: {data[2]} != {expected}"
-                        )
-                        raise ValueError("CRC check failed")
-                    return (data[0] << 8) | data[1]
+        The sensor does not answer the status command while measuring periodically,
+        in which case 0 is returned.
+        :return: Status register value
+        :raises ValueError: On CRC check failure.
+        """
+        try:
+            data = self._send_command_and_read(SHT30_STATUS, 3)
         except OSError as e:
             logger.warning(
                 f"Failed to read status register: {e}. Sensor might be busy or in ART mode."
             )
             return 0  # Fallback
-
-    def soft_reset(self):
-        """
-        Perform a soft reset on the SHT30 sensor.
-        """
-        with _bus_lock:
-            with SMBus(1) as bus:
-                bus.write_i2c_block_data(
-                    self.addr, SHT30_SOFT_RESET >> 8, [SHT30_SOFT_RESET & 0xFF]
-                )
-        time.sleep(0.01)
-
-    _READ_RETRIES = 3
-    _RETRY_DELAY = 0.05
+        expected = self._calculate_crc(bytes(data[:2]))
+        if expected != data[2]:
+            logger.error(f"CRC check failed for status register: {data[2]} != {expected}")
+            raise ValueError("CRC check failed")
+        return (data[0] << 8) | data[1]
 
     def read_data(self) -> tuple[float, float]:
         """
         Fetch the last temperature and humidity sample from the SHT30 sensor.
 
-        The method retries up to :attr:`_READ_RETRIES` times on transient
-        I/O errors before re-raising the last exception.
+        The method retries up to :attr:`_READ_RETRIES` times on transient I/O errors.
+        If all of them fail, the sensor has probably lost its measurement mode
+        (e.g. after a power glitch), so it is re-initialised once with
+        :meth:`start_measurement` before a final fetch.
 
         :return: A tuple of temperature and humidity values.
-        :raises OSError: If all retry attempts fail.
+        :raises OSError: If the read after re-initialisation also fails.
         """
-        last_error: OSError | None = None
         for attempt in range(self._READ_RETRIES):
             try:
                 return self._fetch_sample()
             except OSError as exc:
-                last_error = exc
                 logger.warning(
                     "SHT30 read attempt %d/%d failed: %s",
                     attempt + 1,
@@ -171,7 +198,10 @@ class Sht30:
                     exc,
                 )
                 time.sleep(self._RETRY_DELAY)
-        raise last_error  # type: ignore[misc]
+
+        logger.warning("SHT30 reads keep failing, re-initialising sensor measurement")
+        self.start_measurement()
+        return self._fetch_sample()
 
     def _fetch_sample(self) -> tuple[float, float]:
         """
@@ -181,41 +211,24 @@ class Sht30:
         :raises OSError: On I2C communication failure.
         :raises ValueError: On CRC check failure.
         """
-        with _bus_lock:
-            with SMBus(1) as bus:
-                # To fetch data we use the fetch data command
-                bus.write_i2c_block_data(
-                    self.addr, SHT30_FETCH_DATA >> 8, [SHT30_FETCH_DATA & 0xFF]
-                )
-                # Read 6 bytes (2 bytes temp + 1 byte CRC + 2 bytes hum + 1 byte CRC)
-                data = bus.read_i2c_block_data(self.addr, 0, 6)
+        # 6 bytes: 2 bytes temp + 1 byte CRC + 2 bytes hum + 1 byte CRC
+        data = self._send_command_and_read(SHT30_FETCH_DATA, 6)
 
-                # Check temperature CRC
-                if self._calculate_crc(bytes(data[0:2])) != data[2]:
-                    logger.error("CRC check failed for temperature data")
-                    raise ValueError("CRC check failed")
+        if self._calculate_crc(bytes(data[0:2])) != data[2]:
+            logger.error("CRC check failed for temperature data")
+            raise ValueError("CRC check failed")
 
-                # Check humidity CRC
-                if self._calculate_crc(bytes(data[3:5])) != data[5]:
-                    logger.error("CRC check failed for humidity data")
-                    raise ValueError("CRC check failed")
+        if self._calculate_crc(bytes(data[3:5])) != data[5]:
+            logger.error("CRC check failed for humidity data")
+            raise ValueError("CRC check failed")
 
-                # Convert data
-                temp_raw = (data[0] << 8) | data[1]
-                hum_raw = (data[3] << 8) | data[4]
+        temp_raw = (data[0] << 8) | data[1]
+        hum_raw = (data[3] << 8) | data[4]
 
-                temperature = -45 + 175 * (temp_raw / 65535.0)
-                humidity = 100 * (hum_raw / 65535.0)
+        temperature = -45 + 175 * (temp_raw / 65535.0)
+        humidity = 100 * (hum_raw / 65535.0)
 
-                return temperature, humidity
-
-    def start_art(self):
-        """
-        Start the Accelerated Response Time (ART) mode.
-        """
-        with _bus_lock:
-            with SMBus(1) as bus:
-                bus.write_i2c_block_data(self.addr, SHT30_ART >> 8, [SHT30_ART & 0xFF])
+        return temperature, humidity
 
     @staticmethod
     def _calculate_crc(data: bytes) -> int:

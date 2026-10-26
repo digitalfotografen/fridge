@@ -9,6 +9,7 @@ from fridge.signals import mode_idle, mode_cooling_down, mode_cool, mode_special
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.hardware
 def test_i2c_scan():
     """
     Scan the I2C bus for connected devices.
@@ -416,9 +417,104 @@ def test_sht30_read_data_raises_after_all_retries_fail(mocker):
     sht30.addr = 0x44
 
     mocker.patch.object(sht30, "_fetch_sample", side_effect=OSError("persistent error"))
+    mocker.patch.object(sht30, "start_measurement")
 
     with pytest.raises(OSError, match="persistent error"):
         sht30.read_data()
+
+
+def _command_writes(i2c_msg_mock) -> list[int]:
+    """Return the 16-bit SHT30 commands passed to ``i2c_msg.write``."""
+    return [(call.args[1][0] << 8) | call.args[1][1] for call in i2c_msg_mock.write.call_args_list]
+
+
+def test_sht30_start_measurement_sends_init_sequence_in_order(mocker):
+    """
+    start_measurement should send break, soft reset, clear status and start ART, in that order.
+    """
+    mocker.patch("fridge.i2c.time")  # skip real sleep
+    mocker.patch("fridge.i2c.SMBus")
+    i2c_msg_mock = mocker.patch("fridge.i2c.i2c_msg")
+
+    Sht30().start_measurement()
+
+    assert _command_writes(i2c_msg_mock) == [
+        i2c_module.SHT30_BREAK,
+        i2c_module.SHT30_SOFT_RESET,
+        i2c_module.SHT30_CLEAR_STATUS,
+        i2c_module.SHT30_ART,
+    ]
+    for call in i2c_msg_mock.write.call_args_list:
+        assert call.args[0] == 0x44
+
+
+def test_sht30_read_data_reinitialises_after_all_retries_fail(mocker):
+    """
+    read_data should call start_measurement once after all retries fail, then fetch again.
+    """
+    mocker.patch("fridge.i2c.time")  # skip real sleep
+    sht30 = Sht30()
+    fetch_mock = mocker.patch.object(
+        sht30,
+        "_fetch_sample",
+        side_effect=[OSError("nack")] * Sht30._READ_RETRIES + [(5.0, 60.0)],
+    )
+    start_mock = mocker.patch.object(sht30, "start_measurement")
+
+    assert sht30.read_data() == (5.0, 60.0)
+    start_mock.assert_called_once_with()
+    assert fetch_mock.call_count == Sht30._READ_RETRIES + 1
+
+
+def test_sht30_read_data_raises_when_read_after_reinit_fails(mocker):
+    """
+    read_data should raise the last OSError when the fetch after re-initialisation fails too.
+    """
+    mocker.patch("fridge.i2c.time")  # skip real sleep
+    sht30 = Sht30()
+    mocker.patch.object(
+        sht30,
+        "_fetch_sample",
+        side_effect=[OSError("nack")] * Sht30._READ_RETRIES + [OSError("still nack")],
+    )
+    start_mock = mocker.patch.object(sht30, "start_measurement")
+
+    with pytest.raises(OSError, match="still nack"):
+        sht30.read_data()
+    start_mock.assert_called_once_with()
+
+
+def test_sht30_fetch_sample_uses_plain_i2c_messages(mocker):
+    """
+    _fetch_sample should use i2c_msg write/read, not an SMBus register read.
+    """
+    smbus_cls = mocker.patch("fridge.i2c.SMBus")
+    bus = smbus_cls.return_value.__enter__.return_value
+    i2c_msg_mock = mocker.patch("fridge.i2c.i2c_msg")
+    raw = [0x66, 0x66, 0x00, 0x80, 0x00, 0x00]
+    raw[2] = Sht30._calculate_crc(bytes(raw[0:2]))
+    raw[5] = Sht30._calculate_crc(bytes(raw[3:5]))
+    i2c_msg_mock.read.return_value = raw
+
+    temperature, humidity = Sht30()._fetch_sample()
+
+    bus.read_i2c_block_data.assert_not_called()
+    assert _command_writes(i2c_msg_mock) == [i2c_module.SHT30_FETCH_DATA]
+    i2c_msg_mock.read.assert_called_once_with(0x44, 6)
+    assert temperature == pytest.approx(-45 + 175 * 0x6666 / 65535)
+    assert humidity == pytest.approx(100 * 0x8000 / 65535)
+
+
+def test_sht30_fetch_sample_raises_on_crc_error(mocker):
+    """
+    _fetch_sample should raise ValueError when the temperature CRC does not match.
+    """
+    mocker.patch("fridge.i2c.SMBus")
+    i2c_msg_mock = mocker.patch("fridge.i2c.i2c_msg")
+    i2c_msg_mock.read.return_value = [0x66, 0x66, 0x00, 0x80, 0x00, 0x00]
+
+    with pytest.raises(ValueError, match="CRC"):
+        Sht30()._fetch_sample()
 
 
 def test_sht30_crc(sht30):
@@ -432,6 +528,7 @@ def test_sht30_crc(sht30):
     assert sht30._calculate_crc(bytes([0x33, 0x6E])) == 0xBA
 
 
+@pytest.mark.hardware
 def test_sht30_status(sht30):
     """
     Test the status register of the SHT30 sensor.
@@ -442,20 +539,20 @@ def test_sht30_status(sht30):
     assert isinstance(status, int)
 
 
+@pytest.mark.hardware
 def test_sht30_art_fetch_data(sht30):
     """
     Test the data fetch functionality of the SHT30 sensor.
-    Make several readings and check that the values are within expected ranges.
-    The temperature should ba above 10°C and humidity should be above 30%.
+    Make several readings and check that the values are within a plausible range
+    for the fridge room.
     :return:
     """
-    sht30.start_art()
     import time
 
-    time.sleep(0.1)  # Wait for first measurement
+    sht30.start_measurement()
     for _ in range(3):
         temp, hum = sht30.read_data()
         logger.info(f"Read temp: {temp}, hum: {hum}")
-        assert 10.0 < temp < 40.0
-        assert 30.0 < hum < 90.0
+        assert -10.0 < temp < 40.0
+        assert 10.0 < hum < 100.0
         time.sleep(0.5)
